@@ -38,6 +38,11 @@ async function getChartmetricToken() {
 // }
 
 async function getChartmetricStats(chartmetricId) {
+  if (!chartmetricId) {
+    console.warn("⚠️ Empty chartmetricId passed, skipping...");
+    return null;
+  }
+
   if (!accessToken) await getChartmetricToken();
   if (!accessToken) return null;
 
@@ -50,10 +55,14 @@ async function getChartmetricStats(chartmetricId) {
         },
       }
     );
-    // console.log("Chartmetric full stats for artist:", res.data.obj);
-    return res.data.obj; // 'obj' holds the actual artist data
+    // return res.data.obj;
+    // console.log("🔥 RAW Chartmetric data:", JSON.stringify(res.data));
+  
+    // console.log("🔥 Parsed Chartmetric data:", JSON.stringify(parsed, null, 2));
+    const parsed = parseChartmetricMetrics(res.data.obj);
+    return res.data.obj;
   } catch (err) {
-    console.error(`Chartmetric stats error for ${chartmetricId}:`, err);
+    console.error(`Chartmetric stats error for ${chartmetricId}:`, err.message);
     return null;
   }
 }
@@ -133,6 +142,53 @@ async function getChartmetricSearchResults(name) {
     console.error(`Chartmetric search error for name ${name}:`, err.message);
     return null;
   }
+}
+
+
+function parseChartmetricMetrics(data) {
+  const stats = data?.cm_statistics?.latest || {};
+  const monthlyStats = data?.cm_statistics?.monthly_diff || {};
+  const weeklyStats = data?.cm_statistics?.weekly_diff || {};
+  const score = data?.cm_statistics?.latest?.rank?.overall?.score_100;
+
+  const tiktokGrowth =
+    data?.cm_statistics?.weekly_diff_percent?.tiktok_track_posts || 0;
+
+  const twitterSpike =
+    data?.cm_statistics?.weekly_diff_percent?.twitter_followers || 0;
+
+  const socialGrowthPct =
+    data?.cm_statistics?.monthly_diff_percent?.ins_followers || 0;
+
+  const followersTotal =
+    (data?.cm_statistics?.sp_followers || 0) +
+    (data?.cm_statistics?.ins_followers || 0) +
+    (data?.cm_statistics?.ycs_subscribers || 0);
+
+  return {
+    spotify_listeners: data?.cm_statistics?.sp_monthly_listeners || 0,
+    avg_30d_streams: 0, // You don't have this yet, can integrate later
+    chart_years: estimateYearsFrom(data?.created_at),
+    follower_total: followersTotal,
+    releases_per_year: 0, // Need manual integration or external source
+    stream_growth_7d: weeklyStats?.sp_monthly_listeners || 0,
+    tiktok_growth_7d: tiktokGrowth,
+    momentum_score: score || 0,
+    twitter_spike: twitterSpike,
+    billboard_jump: 0, // Optional
+    listener_growth_30d: monthlyStats?.sp_monthly_listeners || 0,
+    first_release_months: 200, // Optional; set a default or fetch properly
+    playlist_adds_per_day: stats?.spotify_playlist_count || 0,
+    social_growth_pct: socialGrowthPct || 0,
+  };
+}
+
+function estimateYearsFrom(dateString) {
+  if (!dateString) return NaN;
+  const created = new Date(dateString);
+  const now = new Date();
+  const diffYears = (now - created) / (1000 * 60 * 60 * 24 * 365);
+  return Math.floor(diffYears);
 }
 
 
