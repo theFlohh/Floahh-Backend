@@ -2,6 +2,7 @@ const UserTeam = require("../models/UserTeam");
 const TeamMember = require("../models/TeamMember");
 const Artist = require("../models/Artist");
 const Tier = require("../models/Tier"); // Import the Tier model
+const DailyScore = require("../models/DailyScore");
 const { determineCategory } = require("../utils/draftUtils");
 
 exports.getDraftableArtists = async (req, res) => {
@@ -87,34 +88,74 @@ exports.submitDraft = async (req, res) => {
 
 
 
+// exports.getUserDraft = async (req, res) => {
+//   const  userId  = req.user._id; // Assuming user is authenticated
+//   console.log("user id is", req.user);
+  
+//   try {
+//     // Find the user's team
+//     const userTeam = await UserTeam.findOne({ userId });
+//     console.log("user team is", userTeam);
+    
+    
+//     if (!userTeam) {
+//       return res.status(404).json({ error: "User  team not found" });
+//     }
+
+//     // Find team members associated with the user's team
+//     const teamMembers = await TeamMember.find({ teamId: userTeam._id }).populate("artistId");
+//     console.log("team members are", teamMembers);
+    
+
+//     // Return the user team along with its team members
+//     res.json({ userTeam, teamMembers });
+//   } catch (err) {
+//     console.error("Error fetching user draft:", err.message);
+//     res.status(500).json({ error: "Failed to fetch user draft" });
+//   }
+// };
+
+
+
 
 exports.getUserDraft = async (req, res) => {
-  const  userId  = req.user._id; // Assuming user is authenticated
-  console.log("user id is", req.user);
-  
+  const userId = req.user._id;
+
   try {
-    // Find the user's team
     const userTeam = await UserTeam.findOne({ userId });
-    console.log("user team is", userTeam);
-    
-    
+
     if (!userTeam) {
-      return res.status(404).json({ error: "User  team not found" });
+      return res.status(404).json({ error: "User team not found" });
     }
 
-    // Find team members associated with the user's team
+    // Fetch team members with artist data
     const teamMembers = await TeamMember.find({ teamId: userTeam._id }).populate("artistId");
-    console.log("team members are", teamMembers);
-    
 
-    // Return the user team along with its team members
-    res.json({ userTeam, teamMembers });
+    // Fetch totalScores for each artist in parallel
+    const enriched = await Promise.all(
+      teamMembers.map(async (member) => {
+        const scoreAgg = await DailyScore.aggregate([
+          { $match: { artistId: member.artistId._id } },
+          { $group: { _id: null, totalScore: { $sum: "$totalScore" } } },
+        ]);
+        const totalScore = scoreAgg[0]?.totalScore || 0;
+
+        return {
+          ...member.toObject(),
+          artistId: {
+            ...member.artistId.toObject(),
+            totalScore,
+          },
+        };
+      })
+    );
+
+    res.json({ userTeam, teamMembers: enriched });
   } catch (err) {
     console.error("Error fetching user draft:", err.message);
     res.status(500).json({ error: "Failed to fetch user draft" });
   }
 };
-
 
 
 exports.lockDraft = async (req, res) => {
@@ -129,5 +170,42 @@ exports.lockDraft = async (req, res) => {
   } catch (err) {
     console.error("Error locking draft:", err.message);
     res.status(500).json({ error: "Failed to lock draft" });
+  }
+};
+
+exports.  updateDraft = async (req, res) => {
+  const userId = req.user._id;
+  const { draftedArtists } = req.body; // draftedArtists should be an array of artist IDs
+  try {
+    // Find the user's team
+    const userTeam = await UserTeam.findOne({ userId });
+    if (!userTeam) {
+      return res.status(404).json({ error: "User team not found" });
+    }
+    // Check if 12 hours have passed since creation
+    const now = new Date();
+    const createdAt = new Date(userTeam.createdAt);
+    const hoursDiff = (now - createdAt) / (1000 * 60 * 60);
+    if (hoursDiff < 12) {
+      return res.status(403).json({ error: "You can only update your draft within 12 hours from creation." });
+    }
+    // Remove old team members
+    await TeamMember.deleteMany({ teamId: userTeam._id });
+    // Add new team members
+    const teamMembers = await Promise.all(
+      draftedArtists.map(async (artistId) => {
+        const category = await determineCategory(artistId);
+        return {
+          teamId: userTeam._id,
+          artistId,
+          category,
+        };
+      })
+    );
+    await TeamMember.insertMany(teamMembers);
+    res.status(200).json({ message: "Draft updated successfully" });
+  } catch (err) {
+    console.error("Error updating draft:", err.message);
+    res.status(500).json({ error: "Failed to update draft" });
   }
 };

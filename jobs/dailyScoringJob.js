@@ -1,9 +1,11 @@
 const Artist = require("../models/Artist");
 const DailyScore = require("../models/DailyScore");
+const User = require("../models/User");
 const { getTopTracks } = require("../services/spotifyService");
 const { getChannelVideos } = require("../services/youtubeService");
 const { getChartmetricStats } = require("../services/chartmetricService");
 const { calculateSpotifyScore, calculateYouTubeScore } = require("../utils/scoringUtils");
+const { updateUserPoints } = require("../utils/pointsCalculator");
 
 let lastScoringTime = null; // 🆕
 
@@ -113,6 +115,11 @@ const runDailyScoring = async () => {
 
       console.log(`✅ Scored ${artist.name}: ${combinedScore} pts`);
     }
+    const users = await User.find({});
+for (const user of users) {
+  console.log(`Updating points for user: ${user._id}`);
+  await updateUserPoints(user._id);
+}
 
      lastScoringTime = new Date();
     console.log("🎯 Daily scoring job completed.");

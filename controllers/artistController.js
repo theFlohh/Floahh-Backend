@@ -6,10 +6,45 @@ const fs = require("fs");
 
 const upload = multer({ dest: "uploads/" });
 
+// exports.getAllArtists = async (req, res) => {
+//   try {
+//     const artists = await Artist.find();
+//     res.json(artists);
+//   } catch (err) {
+//     console.error("Fetch artists error:", err.message);
+//     res.status(500).json({ error: "Failed to fetch artists" });
+//   }
+// };
+
+
+
 exports.getAllArtists = async (req, res) => {
   try {
     const artists = await Artist.find();
-    res.json(artists);
+
+    const artistScores = await DailyScore.aggregate([
+      {
+        $group: {
+          _id: "$artistId",
+          totalScore: { $sum: "$totalScore" },
+        },
+      },
+    ]);
+
+    const scoreMap = {};
+    artistScores.forEach(score => {
+      scoreMap[score._id.toString()] = score.totalScore;
+    });
+
+    const enrichedArtists = artists.map(artist => {
+      const totalScore = scoreMap[artist._id.toString()] || 0;
+      return {
+        ...artist.toObject(),
+        totalScore,
+      };
+    });
+
+    res.json(enrichedArtists);
   } catch (err) {
     console.error("Fetch artists error:", err.message);
     res.status(500).json({ error: "Failed to fetch artists" });

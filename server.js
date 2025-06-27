@@ -37,7 +37,7 @@ app.use("/api/health", healthRoutes);
 app.use("/api/tier", tierRoutes);
 app.use("/api/draft", draftRoutes);
 
-// runDailyScoring();
+runDailyScoring();
 
 
 // 🕒 Schedule to run every day at 2 AM server time
