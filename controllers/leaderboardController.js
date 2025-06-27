@@ -1,6 +1,8 @@
 const DailyScore = require("../models/DailyScore");
 const Artist = require("../models/Artist");
 const WeeklyBonus = require("../models/WeeklyBonus");
+const User = require("../models/User");
+const FriendLeaderboard = require("../models/friendLeaderboardModel");
 
 // exports.getDailyLeaderboard = async (req, res) => {
 //   const dateQuery = req.query.date;
@@ -433,5 +435,124 @@ exports.getStoredBonuses = async (req, res) => {
     res.status(500).json({ error: "Failed to fetch stored bonuses" });
   }
 };
+
+
+
+exports.getGlobalLeaderboard = async (req, res) => {
+  try {
+    const timeframe = req.query.timeframe || 'all';
+
+    let match = {};
+    if (timeframe === 'weekly') {
+      const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      match.createdAt = { $gte: weekAgo };
+    } else if (timeframe === 'monthly') {
+      const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      match.createdAt = { $gte: monthAgo };
+    }
+
+    const users = await User.find(match)
+      .sort({ totalPoints: -1 })
+      .limit(100)
+      .select("name email totalPoints");
+
+    res.status(200).json({ users });
+  } catch (err) {
+    res.status(500).json({ error: "Something went wrong." });
+  }
+};
+
+exports.getFriendLeaderboardByParams = async (req, res) => {
+  try {
+    const { leaderboardId } = req.params;
+    const board = await FriendLeaderboard.findById(leaderboardId)
+      .populate("members", "username totalPoints");
+
+    if (!board) return res.status(404).json({ error: "Leaderboard not found" });
+
+    const sorted = board.members.sort((a, b) => b.totalPoints - a.totalPoints);
+    res.json({ name: board.name, leaderboard: sorted });
+  } catch (err) {
+    res.status(500).json({ error: "Something went wrong." });
+  }
+};
+
+// POST /api/leaderboard/friend
+exports.createFriendLeaderboard = async (req, res) => {
+  const { name, members } = req.body;
+  const creatorId = req.user._id;
+
+  try {
+    const board = await FriendLeaderboard.create({
+      name,
+      creatorId,
+      members: [...members, creatorId], // Add creator as member
+    });
+    res.status(201).json({ message: "Friend leaderboard created", leaderboard: board });
+  } catch (err) {
+    console.error("Error creating friend leaderboard:", err);
+    res.status(500).json({ error: "Failed to create leaderboard" });
+  }
+};
+
+
+// GET /api/leaderboard/friend/:id
+exports.getFriendLeaderboard = async (req, res) => {
+  try {
+    console.log("req is", req.params);
+    
+    const board = await FriendLeaderboard.findById(req.params.id).populate("members", "name totalPoints");
+
+    if (!board) return res.status(404).json({ error: "Leaderboard not found" });
+
+    const sorted = board.members.sort((a, b) => b.totalPoints - a.totalPoints);
+
+    res.json({ name: board.name, leaderboard: sorted });
+  } catch (err) {
+    console.error("Error fetching friend leaderboard:", err);
+    res.status(500).json({ error: "Failed to fetch leaderboard in get frinds api" });
+  }
+};
+
+// GET /api/leaderboard/friend/mine
+exports.getMyFriendLeaderboards = async (req, res) => {
+  try {
+    console.log("req is", req);
+    
+    const leaderboards = await FriendLeaderboard.find({ creatorId: req.user._id });
+    console.log("leaderboards is", leaderboards);
+    
+    res.json({ leaderboards });
+  } catch (err) {
+    console.log("Error fetching your leaderboards:", err);
+    
+    res.status(500).json({ error: "Failed to fetch your leaderboards" });
+  }
+};
+
+
+// POST /api/leaderboard/friend/:id/join
+exports.joinFriendLeaderboard = async (req, res) => {
+  const userId = req.user._id;
+  const leaderboardId = req.params.id;
+
+  try {
+    const board = await FriendLeaderboard.findById(leaderboardId);
+    if (!board) return res.status(404).json({ error: "Leaderboard not found" });
+
+    if (!board.members.includes(userId)) {
+      board.members.push(userId);
+      await board.save();
+    }
+
+    res.json({ message: "Joined leaderboard successfully" });
+  } catch (err) {
+    res.status(500).json({ error: "Failed to join leaderboard" });
+  }
+};
+
+
+
+
 
 

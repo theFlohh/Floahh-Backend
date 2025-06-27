@@ -21,4 +21,20 @@ const authMiddleware = async (req, res, next) => {
   }
 };
 
-module.exports = authMiddleware;
+// Middleware to allow only admin users
+const requireAdmin = (req, res, next) => {
+  if (req.user.role !== "admin") {
+    return res.status(403).json({ error: "Admin access required" });
+  }
+  next();
+};
+
+// Middleware to allow only normal users (not admin)
+const requireUser = (req, res, next) => {
+  if (req.user.role !== "user") {
+    return res.status(403).json({ error: "User access required" });
+  }
+  next();
+};
+
+module.exports = { authMiddleware, requireAdmin, requireUser };
