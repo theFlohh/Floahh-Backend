@@ -37,20 +37,20 @@ app.use("/api/health", healthRoutes);
 app.use("/api/tier", tierRoutes);
 app.use("/api/draft", draftRoutes);
 
-runDailyScoring();
+// runDailyScoring();
 
 
 // 🕒 Schedule to run every day at 2 AM server time
-// cron.schedule("0 2 * * *", async () => {
-//   console.log("⏰ Running scheduled daily scoring job...");
-//   await runDailyScoring();
-// });
+cron.schedule("0 2 * * *", async () => {
+  console.log("⏰ Running scheduled daily scoring job...");
+  await runDailyScoring();
+});
 
 // runWeeklyTiering();
-// cron.schedule("0 3 * * 1", async () => {
-//   console.log("🕒 Running Weekly Tiering Job...");
-//   await runWeeklyTiering();
-// });
+cron.schedule("0 3 * * 1", async () => {
+  console.log("🕒 Running Weekly Tiering Job...");
+  await runWeeklyTiering();
+});
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
