@@ -1,0 +1,12 @@
+{
+  "crons": [
+    {
+      "schedule": "0 2 * * *",
+      "command": "node jobs/runDailyScoringRunner.js"
+    },
+    {
+      "schedule": "0 3 * * 1",
+      "command": "node jobs/runWeeklyTieringRunner.js"
+    }
+  ]
+}

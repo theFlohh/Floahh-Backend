@@ -2,16 +2,16 @@ const express = require("express");
 const mongoose = require("mongoose");
 const dotenv = require("dotenv");
 const cors = require("cors");
-const cron = require("node-cron");
+// const cron = require("node-cron");
 const spotifyRoutes = require("./routes/spotifyRoutes");
 const leaderboardRoutes = require("./routes/leaderboardRoutes");
 const artistRoutes = require("./routes/artistRoutes");
-const {runDailyScoring} = require("./jobs/dailyScoringJob");
+// const {runDailyScoring} = require("./jobs/dailyScoringJob");
 const healthRoutes = require("./routes/healthRoutes");
 const authRoutes = require("./routes/authRoutes");
 const tierRoutes = require("./routes/tierRoutes");
 const draftRoutes = require("./routes/draftRoutes");
-const runWeeklyTiering = require("./jobs/weeklyTieringJob");
+// const runWeeklyTiering = require("./jobs/weeklyTieringJob");
 
 
 dotenv.config();
@@ -41,16 +41,16 @@ app.use("/api/draft", draftRoutes);
 
 
 // 🕒 Schedule to run every day at 2 AM server time
-cron.schedule("0 2 * * *", async () => {
-  console.log("⏰ Running scheduled daily scoring job...");
-  await runDailyScoring();
-});
+// cron.schedule("0 2 * * *", async () => {
+//   console.log("⏰ Running scheduled daily scoring job...");
+//   await runDailyScoring();
+// });
 
 // runWeeklyTiering();
-cron.schedule("0 3 * * 1", async () => {
-  console.log("🕒 Running Weekly Tiering Job...");
-  await runWeeklyTiering();
-});
+// cron.schedule("0 3 * * 1", async () => {
+//   console.log("🕒 Running Weekly Tiering Job...");
+//   await runWeeklyTiering();
+// });
 
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
