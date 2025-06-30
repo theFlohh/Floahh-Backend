@@ -6,12 +6,12 @@ const cors = require("cors");
 const spotifyRoutes = require("./routes/spotifyRoutes");
 const leaderboardRoutes = require("./routes/leaderboardRoutes");
 const artistRoutes = require("./routes/artistRoutes");
-// const {runDailyScoring} = require("./jobs/dailyScoringJob");
+const {runDailyScoring} = require("./jobs/dailyScoringJob");
 const healthRoutes = require("./routes/healthRoutes");
 const authRoutes = require("./routes/authRoutes");
 const tierRoutes = require("./routes/tierRoutes");
 const draftRoutes = require("./routes/draftRoutes");
-// const runWeeklyTiering = require("./jobs/weeklyTieringJob");
+const runWeeklyTiering = require("./jobs/weeklyTieringJob");
 
 
 dotenv.config();

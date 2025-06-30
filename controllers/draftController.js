@@ -173,7 +173,7 @@ exports.lockDraft = async (req, res) => {
   }
 };
 
-exports.  updateDraft = async (req, res) => {
+exports.updateDraft = async (req, res) => {
   const userId = req.user._id;
   const { draftedArtists } = req.body; // draftedArtists should be an array of artist IDs
   try {
