@@ -175,7 +175,7 @@ exports.lockDraft = async (req, res) => {
 
 exports.updateDraft = async (req, res) => {
   const userId = req.user._id;
-  const { draftedArtists } = req.body; // draftedArtists should be an array of artist IDs
+  const { draftedArtists } = req.body;
   try {
     // Find the user's team
     const userTeam = await UserTeam.findOne({ userId });
