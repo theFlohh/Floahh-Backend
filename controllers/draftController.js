@@ -179,14 +179,19 @@ exports.updateDraft = async (req, res) => {
   try {
     // Find the user's team
     const userTeam = await UserTeam.findOne({ userId });
+    console.log("user team is", userTeam);
+    
     if (!userTeam) {
       return res.status(404).json({ error: "User team not found" });
     }
     // Check if 12 hours have passed since creation
     const now = new Date();
     const createdAt = new Date(userTeam.createdAt);
+    // console.log("created at is", createdAt);
     const hoursDiff = (now - createdAt) / (1000 * 60 * 60);
-    if (hoursDiff < 12) {
+    // console.log("hours diff is", hoursDiff);
+    
+    if (hoursDiff > 12) {
       return res.status(403).json({ error: "You can only update your draft within 12 hours from creation." });
     }
     // Remove old team members
