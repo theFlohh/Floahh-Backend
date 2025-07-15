@@ -2,6 +2,7 @@
 
     const UserTeamSchema = new mongoose.Schema({
     userId: { type: mongoose.Schema.Types.ObjectId, ref: "User ", required: true },
+    teamName: { type: String },
     isLocked: { type: Boolean, default: false },
     createdAt: { type: Date, default: Date.now },
     });
