@@ -196,11 +196,11 @@ exports.uploadArtistCSV = [
       .on("data", (row) => {
         artists.push({
           name: row.name,
-          image: row.image,
+          image: row?.image || null,
           spotifyId: row.spotifyId,
           youtubeChannelId: row.youtubeChannelId,
           chartmetricId: row.chartmetricId,
-          tiktokUsername: row.tiktokUsername,
+          tiktokUsername: row?.tiktokUsername || null,
           genres: row.genres ? row.genres.split(";").map(g => g.trim()) : [],
         });
       })
