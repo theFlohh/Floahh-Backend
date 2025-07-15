@@ -53,13 +53,13 @@ exports.getDraftableArtists = async (req, res) => {
 
 
 exports.submitDraft = async (req, res) => {
-  const { draftedArtists } = req.body; // draftedArtists should be an array of artist IDs
+  const { draftedArtists, teamName } = req.body; // teamName is optional
   const userId = req.user._id;
   console.log("User  ID is", userId);
   
   try {
-    // Create the user team
-    const userTeam = await UserTeam.create({ userId });
+    // Create the user team with optional teamName
+    const userTeam = await UserTeam.create({ userId, teamName });
     console.log("User  Team created:", userTeam);
     
     // Use Promise.all to await all category determinations
@@ -150,7 +150,11 @@ exports.getUserDraft = async (req, res) => {
       })
     );
 
-    res.json({ userTeam, teamMembers: enriched });
+    res.json({ 
+      teamName: userTeam.teamName, 
+      userTeam, 
+      teamMembers: enriched 
+    });
   } catch (err) {
     console.error("Error fetching user draft:", err.message);
     res.status(500).json({ error: "Failed to fetch user draft" });
@@ -175,7 +179,7 @@ exports.lockDraft = async (req, res) => {
 
 exports.updateDraft = async (req, res) => {
   const userId = req.user._id;
-  const { draftedArtists } = req.body;
+  const { draftedArtists, teamName } = req.body;
   try {
     // Find the user's team
     const userTeam = await UserTeam.findOne({ userId });
@@ -187,12 +191,14 @@ exports.updateDraft = async (req, res) => {
     // Check if 12 hours have passed since creation
     const now = new Date();
     const createdAt = new Date(userTeam.createdAt);
-    // console.log("created at is", createdAt);
     const hoursDiff = (now - createdAt) / (1000 * 60 * 60);
-    // console.log("hours diff is", hoursDiff);
-    
     if (hoursDiff > 12) {
       return res.status(403).json({ error: "You can only update your draft within 12 hours from creation." });
+    }
+    // Update teamName if provided
+    if (teamName) {
+      userTeam.teamName = teamName;
+      await userTeam.save();
     }
     // Remove old team members
     await TeamMember.deleteMany({ teamId: userTeam._id });
