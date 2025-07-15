@@ -2,7 +2,7 @@ const express = require("express");
 const mongoose = require("mongoose");
 const dotenv = require("dotenv");
 const cors = require("cors");
-// const cron = require("node-cron");
+const cron = require("node-cron");
 const spotifyRoutes = require("./routes/spotifyRoutes");
 const leaderboardRoutes = require("./routes/leaderboardRoutes");
 const artistRoutes = require("./routes/artistRoutes");
@@ -37,7 +37,7 @@ app.use("/api/health", healthRoutes);
 app.use("/api/tier", tierRoutes);
 app.use("/api/draft", draftRoutes);
 
-runDailyScoring();
+// runDailyScoring();
 // 
 
 // 🕒 Schedule to run every day at 2 AM server time
