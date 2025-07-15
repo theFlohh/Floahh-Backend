@@ -5,5 +5,4 @@ const { authMiddleware, requireAdmin, requireUser } = require("../middleware/aut
 router.get("/:id/summary", getArtistSummary);
 router.get("/all", getAllArtists);
 router.post("/upload-csv",requireAdmin ,uploadArtistCSV);
-
 module.exports = router;

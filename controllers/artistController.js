@@ -51,6 +51,45 @@ exports.getAllArtists = async (req, res) => {
   }
 };
 
+// exports.getArtistSummary = async (req, res) => {
+//   const artistId = req.params.id;
+
+//   try {
+//     const artist = await Artist.findById(artistId);
+//     if (!artist) return res.status(404).json({ error: "Artist not found" });
+
+//     const latestScore = await DailyScore.findOne({ artistId })
+//       .sort({ date: -1 })
+//       .lean();
+
+//     const past7 = await DailyScore.find({
+//       artistId,
+//       date: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
+//     });
+
+//     const past30 = await DailyScore.find({
+//       artistId,
+//       date: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+//     });
+
+//     const weeklyTotal = past7.reduce((sum, e) => sum + e.totalScore, 0);
+//     const monthlyTotal = past30.reduce((sum, e) => sum + e.totalScore, 0);
+
+//     res.json({
+//       name: artist.name,
+//       spotifyId: artist.spotifyId,
+//       youtubeChannelId: artist.youtubeChannelId,
+//       chartmetricId: artist.chartmetricId || null,
+//       latestScore,
+//       weeklyTotal,
+//       monthlyTotal,
+//     });
+//   } catch (err) {
+//     console.error("Artist summary error:", err.message);
+//     res.status(500).json({ error: "Failed to fetch artist summary" });
+//   }
+// };
+
 exports.getArtistSummary = async (req, res) => {
   const artistId = req.params.id;
 
@@ -75,6 +114,52 @@ exports.getArtistSummary = async (req, res) => {
     const weeklyTotal = past7.reduce((sum, e) => sum + e.totalScore, 0);
     const monthlyTotal = past30.reduce((sum, e) => sum + e.totalScore, 0);
 
+    // 1. Best Platform (based on breakdown score)
+    const breakdown = latestScore?.breakdown || {};
+    let bestPlatform = "N/A";
+    let bestPlatformScore = 0;
+    for (const [platform, score] of Object.entries(breakdown)) {
+      if (score > bestPlatformScore) {
+        bestPlatform = platform;
+        bestPlatformScore = score;
+      }
+    }
+
+    // 2. Platform with most views
+    const viewsMap = {
+      Spotify: latestScore?.spotifyStreams || 0,
+      YouTube: latestScore?.youtubeViews || 0,
+      TikTok: latestScore?.tiktokViews || 0,
+    };
+    let mostViewedPlatform = "N/A";
+    let mostViews = 0;
+    for (const [platform, views] of Object.entries(viewsMap)) {
+      if (views > mostViews) {
+        mostViews = views;
+        mostViewedPlatform = platform;
+      }
+    }
+
+    // 3. Rank based on totalScore on same date
+    let rank = null;
+    let outOf = 0;
+    if (latestScore?.date) {
+      const topScores = await DailyScore.aggregate([
+        { $match: { date: latestScore.date } },
+        { $sort: { totalScore: -1 } },
+        {
+          $group: {
+            _id: "$artistId",
+            score: { $first: "$totalScore" },
+          },
+        },
+      ]);
+
+      outOf = topScores.length;
+      const rankIndex = topScores.findIndex(entry => entry._id.toString() === artistId.toString());
+      rank = rankIndex >= 0 ? rankIndex + 1 : null;
+    }
+
     res.json({
       name: artist.name,
       spotifyId: artist.spotifyId,
@@ -83,12 +168,19 @@ exports.getArtistSummary = async (req, res) => {
       latestScore,
       weeklyTotal,
       monthlyTotal,
+      bestPlatform,
+      bestPlatformScore,
+      mostViewedPlatform,
+      mostViews,
+      rank,
+      outOf,
     });
   } catch (err) {
     console.error("Artist summary error:", err.message);
     res.status(500).json({ error: "Failed to fetch artist summary" });
   }
 };
+
 
 
 
