@@ -3,6 +3,7 @@ const TeamMember = require("../models/TeamMember");
 const Artist = require("../models/Artist");
 const Tier = require("../models/Tier"); // Import the Tier model
 const DailyScore = require("../models/DailyScore");
+const User = require("../models/User");
 const { determineCategory } = require("../utils/draftUtils");
 
 exports.getDraftableArtists = async (req, res) => {
@@ -14,7 +15,9 @@ exports.getDraftableArtists = async (req, res) => {
     const tiers = await Tier.find({ tier: category }).populate("artistId");
     console.log("tiers are", tiers);
     
-    const artists = tiers.map(tier => tier.artistId); // Extract the artist objects
+    const artists = tiers.map(tier => tier.artistId);
+      console.log("Populated Artist:", tiers.artistId);
+ // Extract the artist objects
     res.json(artists);
   } catch (err) {
     console.error("Error fetching draftable artists:", err.message);
@@ -122,6 +125,12 @@ exports.getUserDraft = async (req, res) => {
   const userId = req.user._id;
 
   try {
+    // Get user info with profile image
+    const user = await User.findById(userId).select("name profileImage");
+    if (!user) {
+      return res.status(404).json({ error: "User not found" });
+    }
+
     const userTeam = await UserTeam.findOne({ userId });
 
     if (!userTeam) {
@@ -150,8 +159,73 @@ exports.getUserDraft = async (req, res) => {
       })
     );
 
+    // Calculate team total points
+    const teamTotalPoints = enriched.reduce((sum, member) => sum + member.artistId.totalScore, 0);
+
+    // Calculate weekly points (last 7 days)
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+    const weeklyScores = await DailyScore.aggregate([
+      {
+        $match: {
+          artistId: { $in: enriched.map(member => member.artistId._id) },
+          date: { $gte: weekAgo }
+        }
+      },
+      {
+        $group: {
+          _id: null,
+          weeklyPoints: { $sum: "$totalScore" }
+        }
+      }
+    ]);
+    const weeklyPoints = weeklyScores[0]?.weeklyPoints || 0;
+
+    // Calculate team weekly ranking
+    const allTeams = await UserTeam.find();
+    const teamWeeklyRankings = await Promise.all(
+      allTeams.map(async (team) => {
+        const teamMembers = await TeamMember.find({ teamId: team._id });
+        if (teamMembers.length === 0) return { teamId: team._id, weeklyPoints: 0 };
+
+        const weeklyScores = await DailyScore.aggregate([
+          {
+            $match: {
+              artistId: { $in: teamMembers.map(member => member.artistId) },
+              date: { $gte: weekAgo }
+            }
+          },
+          {
+            $group: {
+              _id: null,
+              weeklyPoints: { $sum: "$totalScore" }
+            }
+          }
+        ]);
+        return {
+          teamId: team._id,
+          weeklyPoints: weeklyScores[0]?.weeklyPoints || 0
+        };
+      })
+    );
+
+    // Sort teams by weekly points and find current team's rank
+    const sortedTeams = teamWeeklyRankings.sort((a, b) => b.weeklyPoints - a.weeklyPoints);
+    const teamWeeklyRank = sortedTeams.findIndex(team => team.teamId.toString() === userTeam._id.toString()) + 1;
+
+    // Normalize profile image to absolute URL if it's a local path
+    const userProfileImageUrl = user.profileImage
+      ? (user.profileImage.startsWith("http")
+          ? user.profileImage
+          : `${req.protocol}://${req.get("host")}${user.profileImage}`)
+      : null;
+
     res.json({ 
-      teamName: userTeam.teamName, 
+      teamName: userTeam.teamName,
+      userProfileImage: userProfileImageUrl,
+      teamTotalPoints: teamTotalPoints,
+      weeklyPoints: weeklyPoints,
+      weeklyRank: teamWeeklyRank,
+      totalTeams: allTeams.length,
       userTeam, 
       teamMembers: enriched 
     });
@@ -179,7 +253,15 @@ exports.lockDraft = async (req, res) => {
 
 exports.updateDraft = async (req, res) => {
   const userId = req.user._id;
-  const { draftedArtists, teamName } = req.body;
+  // Handle multipart/form-data where values may be strings
+  let { draftedArtists, teamName, profileImage } = req.body;
+  if (typeof draftedArtists === "string") {
+    try {
+      draftedArtists = JSON.parse(draftedArtists);
+    } catch (e) {
+      draftedArtists = [];
+    }
+  }
   try {
     // Find the user's team
     const userTeam = await UserTeam.findOne({ userId });
@@ -200,23 +282,34 @@ exports.updateDraft = async (req, res) => {
       userTeam.teamName = teamName;
       await userTeam.save();
     }
-    // Remove old team members
-    await TeamMember.deleteMany({ teamId: userTeam._id });
-    // Add new team members
-    const teamMembers = await Promise.all(
-      draftedArtists.map(async (artistId) => {
-        const category = await determineCategory(artistId);
-        return {
-          teamId: userTeam._id,
-          artistId,
-          category,
-        };
-      })
-    );
-    await TeamMember.insertMany(teamMembers);
+    // Update user profile image if provided as URL or uploaded file
+    if (req.file && req.file.filename) {
+      await User.findByIdAndUpdate(userId, { profileImage: `/uploads/profile/${req.file.filename}` }, { new: true });
+    } else if (Object.prototype.hasOwnProperty.call(req.body, "profileImage")) {
+      await User.findByIdAndUpdate(userId, { profileImage: profileImage ?? null }, { new: true });
+    }
+    // If draftedArtists are provided, replace team members
+    if (Array.isArray(draftedArtists) && draftedArtists.length > 0) {
+      // Remove old team members
+      await TeamMember.deleteMany({ teamId: userTeam._id });
+      // Add new team members
+      const teamMembers = await Promise.all(
+        draftedArtists.map(async (artistId) => {
+          const category = await determineCategory(artistId);
+          return {
+            teamId: userTeam._id,
+            artistId,
+            category,
+          };
+        })
+      );
+      await TeamMember.insertMany(teamMembers);
+    }
+
     res.status(200).json({ message: "Draft updated successfully" });
   } catch (err) {
     console.error("Error updating draft:", err.message);
     res.status(500).json({ error: "Failed to update draft" });
   }
 };
+

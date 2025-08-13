@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const dotenv = require("dotenv");
 const cors = require("cors");
 const cron = require("node-cron");
+const path = require("path");
 const spotifyRoutes = require("./routes/spotifyRoutes");
 const leaderboardRoutes = require("./routes/leaderboardRoutes");
 const artistRoutes = require("./routes/artistRoutes");
@@ -11,6 +12,7 @@ const healthRoutes = require("./routes/healthRoutes");
 const authRoutes = require("./routes/authRoutes");
 const tierRoutes = require("./routes/tierRoutes");
 const draftRoutes = require("./routes/draftRoutes");
+const userStatsRoutes = require("./routes/userStatsRoutes");
 const runWeeklyTiering = require("./jobs/weeklyTieringJob");
 
 
@@ -19,6 +21,8 @@ const app = express();
 
 app.use(cors());
 app.use(express.json());
+// Serve static uploads (profile images, etc.)
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 mongoose
 .connect(process.env.MONGO_URI, {})
@@ -36,6 +40,7 @@ app.use("/api/artist", artistRoutes);
 app.use("/api/health", healthRoutes);
 app.use("/api/tier", tierRoutes);
 app.use("/api/draft", draftRoutes);
+app.use("/api/user-stats", userStatsRoutes);
 
 // runDailyScoring();
 // 

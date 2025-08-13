@@ -6,17 +6,6 @@ const fs = require("fs");
 
 const upload = multer({ dest: "uploads/" });
 
-// exports.getAllArtists = async (req, res) => {
-//   try {
-//     const artists = await Artist.find();
-//     res.json(artists);
-//   } catch (err) {
-//     console.error("Fetch artists error:", err.message);
-//     res.status(500).json({ error: "Failed to fetch artists" });
-//   }
-// };
-
-
 
 exports.getAllArtists = async (req, res) => {
   try {
@@ -165,6 +154,7 @@ exports.getArtistSummary = async (req, res) => {
       spotifyId: artist.spotifyId,
       youtubeChannelId: artist.youtubeChannelId,
       chartmetricId: artist.chartmetricId || null,
+      image: artist.image || null,
       latestScore,
       weeklyTotal,
       monthlyTotal,
@@ -184,6 +174,38 @@ exports.getArtistSummary = async (req, res) => {
 
 
 
+// exports.uploadArtistCSV = [
+//   upload.single("file"),
+//   async (req, res) => {
+//     if (!req.file) return res.status(400).json({ error: "CSV file missing." });
+
+//     const artists = [];
+
+//     fs.createReadStream(req.file.path)
+//       .pipe(csv())
+//       .on("data", (row) => {
+//         artists.push({
+//           name: row.name,
+//           image: row?.image || null,
+//           spotifyId: row.spotifyId,
+//           youtubeChannelId: row.youtubeChannelId,
+//           chartmetricId: row.chartmetricId,
+//           tiktokUsername: row?.tiktokUsername || null,
+//           genres: row.genres ? row.genres.split(";").map(g => g.trim()) : [],
+//         });
+//       })
+//       .on("end", async () => {
+//         try {
+//           const inserted = await Artist.insertMany(artists, { ordered: false });
+//           fs.unlinkSync(req.file.path); // Clean up
+//           res.json({ success: true, inserted: inserted.length });
+//         } catch (err) {
+//           console.error("Insert error:", err.message);
+//           res.status(500).json({ error: "Failed to insert some or all artists." });
+//         }
+//       });
+//   },
+// ];
 exports.uploadArtistCSV = [
   upload.single("file"),
   async (req, res) => {
@@ -206,13 +228,44 @@ exports.uploadArtistCSV = [
       })
       .on("end", async () => {
         try {
-          const inserted = await Artist.insertMany(artists, { ordered: false });
+          let insertedCount = 0;
+          let updatedCount = 0;
+
+          for (const artist of artists) {
+            const existing = await Artist.findOne({
+              $or: [
+                { spotifyId: artist.spotifyId },
+                { youtubeChannelId: artist.youtubeChannelId },
+                { chartmetricId: artist.chartmetricId }
+              ]
+            });
+
+            if (existing) {
+              const isSame =
+                existing.name === artist.name &&
+                existing.image === artist.image &&
+                existing.tiktokUsername === artist.tiktokUsername &&
+                JSON.stringify(existing.genres) === JSON.stringify(artist.genres);
+
+              if (!isSame) {
+                await Artist.updateOne({ _id: existing._id }, artist);
+                updatedCount++;
+              }
+              // Else skip as nothing changed
+            } else {
+              await Artist.create(artist);
+              insertedCount++;
+            }
+          }
+
           fs.unlinkSync(req.file.path); // Clean up
-          res.json({ success: true, inserted: inserted.length });
+          res.json({ success: true, inserted: insertedCount, updated: updatedCount });
+
         } catch (err) {
-          console.error("Insert error:", err.message);
-          res.status(500).json({ error: "Failed to insert some or all artists." });
+          console.error("Processing error:", err.message);
+          res.status(500).json({ error: "Error during processing." });
         }
       });
   },
 ];
+
