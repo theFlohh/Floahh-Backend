@@ -76,11 +76,13 @@ exports.getDailyLeaderboard = async (req, res) => {
 };
 
 exports.getWeeklyLeaderboard = async (req, res) => {
-  const now = new Date();
-  const sevenDaysAgo = new Date();
-  sevenDaysAgo.setDate(now.getDate() - 6);
-
   try {
+    const now = new Date();
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(now.getDate() - 6);
+    sevenDaysAgo.setHours(0, 0, 0, 0);
+    now.setHours(23, 59, 59, 999);
+
     const weeklyData = await DailyScore.aggregate([
       {
         $match: {
@@ -94,9 +96,9 @@ exports.getWeeklyLeaderboard = async (req, res) => {
           spotify: { $sum: "$breakdown.spotify" },
           youtube: { $sum: "$breakdown.youtube" },
           bonus: { $sum: "$breakdown.bonus" },
-          engagementRate: {$sum: "$engagementRate"},
-          spotifyStreams: {$sum: "$spotifyStreams"},
-          youtubeViews: {$sum: "$youtubeViews" }
+          engagementRate: { $sum: "$engagementRate" },
+          spotifyStreams: { $sum: "$spotifyStreams" },
+          youtubeViews: { $sum: "$youtubeViews" },
         },
       },
       {
@@ -107,9 +109,7 @@ exports.getWeeklyLeaderboard = async (req, res) => {
           as: "artist",
         },
       },
-      {
-        $unwind: "$artist",
-      },
+      { $unwind: "$artist" },
       {
         $project: {
           name: "$artist.name",
@@ -120,21 +120,22 @@ exports.getWeeklyLeaderboard = async (req, res) => {
           engagementRate: 1,
           spotifyStreams: 1,
           youtubeViews: 1,
-
-
         },
       },
-      {
-        $sort: { totalScore: -1 },
-      },
+      { $sort: { totalScore: -1 } },
     ]);
 
     res.json(weeklyData);
   } catch (err) {
-    console.error("Weekly leaderboard error:", err.message);
+    console.error("Weekly leaderboard error:", err);
     res.status(500).json({ error: "Failed to fetch weekly leaderboard" });
   }
 };
+
+
+
+
+
 
 exports.getMonthlyLeaderboard = async (req, res) => {
   const now = new Date();
@@ -441,6 +442,7 @@ exports.getStoredBonuses = async (req, res) => {
 exports.getGlobalLeaderboard = async (req, res) => {
   try {
     const timeframe = req.query.timeframe || 'all';
+    const entity = req.query.entity || 'users'; // 'users' | 'artists'
 
     let match = {};
     if (timeframe === 'weekly') {
@@ -451,13 +453,80 @@ exports.getGlobalLeaderboard = async (req, res) => {
       match.createdAt = { $gte: monthAgo };
     }
 
-    const users = await User.find(match)
-      .sort({ totalPoints: -1 })
-      .limit(100)
-      .select("name email totalPoints");
+    // Conditionally fetch users
+    let users = [];
+    if (entity === 'users') {
+      users = await User.find(match)
+        .sort({ totalPoints: -1 })
+        .limit(100)
+        .select("name totalPoints profileImage")
+        .lean();
+    }
 
-    res.status(200).json({ users });
+    // Conditionally fetch artists using DailyScore aggregation to compute totalScore
+    let artists = [];
+    if (entity === 'artists') {
+      const now = new Date();
+      let dateMatch = {};
+      if (timeframe === 'weekly') {
+        const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+        dateMatch = { date: { $gte: weekAgo, $lte: now } };
+      } else if (timeframe === 'monthly') {
+        const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+        dateMatch = { date: { $gte: monthAgo, $lte: now } };
+      }
+
+      const pipeline = [
+        Object.keys(dateMatch).length ? { $match: dateMatch } : null,
+        { $group: { _id: "$artistId", totalScore: { $sum: "$totalScore" } } },
+        { $sort: { totalScore: -1 } },
+        { $limit: 100 },
+        {
+          $lookup: {
+            from: "artists",
+            localField: "_id",
+            foreignField: "_id",
+            as: "artist"
+          }
+        },
+        { $unwind: "$artist" },
+        { $project: { _id: 1, totalScore: 1, name: "$artist.name", image: "$artist.image" } }
+      ].filter(Boolean);
+
+      artists = await DailyScore.aggregate(pipeline);
+    }
+
+    // Normalize shapes
+    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    const usersFormatted = users.map(u => ({
+      id: u._id,
+      name: u.name,
+      totalPoints: u.totalPoints || 0,
+      image: u.profileImage
+        ? (u.profileImage.startsWith("http") ? u.profileImage : `${baseUrl}${u.profileImage}`)
+        : null,
+      type: 'user',
+    }));
+
+    const artistsFormatted = artists.map(a => ({
+      id: a._id,
+      name: a.name,
+      totalScore: a.totalScore || 0,
+      image: a.image || null,
+      type: 'artist',
+    }));
+
+    // Return only the requested entity
+    if (entity === 'users') {
+      return res.status(200).json({ users: usersFormatted });
+    }
+    if (entity === 'artists') {
+      return res.status(200).json({ artists: artistsFormatted });
+    }
+    // Fallback
+    return res.status(400).json({ error: "Invalid entity. Use 'users' or 'artists'" });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "Something went wrong." });
   }
 };
@@ -548,6 +617,33 @@ exports.joinFriendLeaderboard = async (req, res) => {
     res.json({ message: "Joined leaderboard successfully" });
   } catch (err) {
     res.status(500).json({ error: "Failed to join leaderboard" });
+  }
+};
+
+exports.checkDailyScoreDates = async (req, res) => {
+  try {
+    // Get the latest 10 dates from DailyScore collection
+    const latestDates = await DailyScore.find({}, { date: 1 })
+      .sort({ date: -1 })
+      .limit(10)
+      .lean();
+
+    console.log("Latest 10 dates from DailyScore collection:");
+    latestDates.forEach((doc, index) => {
+      console.log(`${index + 1}. ${doc.date}`);
+    });
+
+    res.json({
+      message: "Check console for latest dates",
+      latestDates: latestDates.map(doc => ({
+        date: doc.date,
+        dateString: doc.date.toISOString(),
+        dateOnly: doc.date.toISOString().split('T')[0]
+      }))
+    });
+  } catch (err) {
+    console.error("Error checking DailyScore dates:", err.message);
+    res.status(500).json({ error: "Failed to check dates" });
   }
 };
 

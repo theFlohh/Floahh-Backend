@@ -9,7 +9,7 @@ router.get("/monthly", getMonthlyLeaderboard);
 router.get("/trending", getTrendingArtists);
 router.get("/weekly-bonuses", getWeeklyBonuses);
 router.get("/weekly-bonuses/stored", getStoredBonuses);
-router.get("/global", getGlobalLeaderboard);
+router.get("/global-leaderboard", getGlobalLeaderboard);
 // router.get("/friend/:leaderboardId", getFriendLeaderboardByParams);
 router.post("/friend", authMiddleware, createFriendLeaderboard);
 router.get("/friend/:id", authMiddleware, getFriendLeaderboard);
