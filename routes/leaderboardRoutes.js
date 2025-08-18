@@ -1,6 +1,6 @@
 const express = require("express");
 const router = express.Router();
-const { getDailyLeaderboard, getWeeklyLeaderboard, getMonthlyLeaderboard, getTrendingArtists, getWeeklyBonuses, getStoredBonuses, getGlobalLeaderboard, getFriendLeaderboard, getFriendLeaderboardByParams, createFriendLeaderboard, getMyFriendLeaderboards, joinFriendLeaderboard, getLeaderboardMoves } = require("../controllers/leaderboardController");
+const { getDailyLeaderboard, getWeeklyLeaderboard, getMonthlyLeaderboard, getTrendingArtists, getWeeklyBonuses, getStoredBonuses, getGlobalLeaderboard, getFriendLeaderboard, getFriendLeaderboardByParams, createFriendLeaderboard, getMyFriendLeaderboards, joinFriendLeaderboard } = require("../controllers/leaderboardController");
 const {authMiddleware} = require("../middleware/authMiddleware");
 
 router.get("/", getDailyLeaderboard);
