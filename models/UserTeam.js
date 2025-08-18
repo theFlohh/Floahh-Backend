@@ -5,6 +5,7 @@
     teamName: { type: String },
     isLocked: { type: Boolean, default: false },
     createdAt: { type: Date, default: Date.now },
+    lastUpdatedAt: { type: Date },
     });
 
     module.exports = mongoose.model("UserTeam", UserTeamSchema);

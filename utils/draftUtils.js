@@ -6,14 +6,17 @@ async function determineCategory(artistId) {
     // Fetch the artist's tier from the Tier model
     const tier = await Tier.findOne({ artistId }).lean();
     if (!tier) {
-      throw new Error("Artist tier not found");
+      // Fallback: default to Standard if no explicit tier is set
+      console.warn(`Tier not found for artist ${artistId}; defaulting category to Standard`);
+      return "Standard";
     }
 
     // Return the category based on the tier
-    return tier.tier; // This should return "Legend", "Trending", or "Breakout"
+    return tier.tier; // One of: "Legend", "Trending", "Breakout", "Standard"
   } catch (err) {
     console.error("Error determining category:", err.message);
-    throw new Error("Failed to determine artist category");
+    // Final fallback to avoid breaking draft updates
+    return "Standard";
   }
 }
 

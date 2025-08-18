@@ -40,6 +40,7 @@ exports.fetchArtist = async (req, res) => {
 exports.fetchTopTracks = async (req, res) => {
   try {
     const tracks = await getTopTracks(req.params.id);
+    
     res.json(tracks);
   } catch (err) {
     console.error("Fetch top tracks error:", err.message);

@@ -3,19 +3,10 @@ const DailyScore = require("../models/DailyScore");
 const csv = require("csv-parser");
 const multer = require("multer");
 const fs = require("fs");
+const { getTopTracks } = require("../services/spotifyService"); // yahan tumhara spotify API helper hoga
+const mongoose = require("mongoose");
 
 const upload = multer({ dest: "uploads/" });
-
-// exports.getAllArtists = async (req, res) => {
-//   try {
-//     const artists = await Artist.find();
-//     res.json(artists);
-//   } catch (err) {
-//     console.error("Fetch artists error:", err.message);
-//     res.status(500).json({ error: "Failed to fetch artists" });
-//   }
-// };
-
 
 
 exports.getAllArtists = async (req, res) => {
@@ -90,6 +81,7 @@ exports.getAllArtists = async (req, res) => {
 //   }
 // };
 
+
 exports.getArtistSummary = async (req, res) => {
   const artistId = req.params.id;
 
@@ -101,20 +93,39 @@ exports.getArtistSummary = async (req, res) => {
       .sort({ date: -1 })
       .lean();
 
+    // Calculate date range for last 7 days using UTC dates 
+    const today = new Date();
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setUTCDate(today.getUTCDate() - 6); // Last 7 days including today
+    
+    // Set time to start and end of day in UTC
+    sevenDaysAgo.setUTCHours(0, 0, 0, 0);
+    today.setUTCHours(23, 59, 59, 999);
+
+    console.log(`Fetching weekly stats from ${sevenDaysAgo.toISOString()} to ${today.toISOString()} for artist ${artistId}`);
+
     const past7 = await DailyScore.find({
-      artistId,
-      date: { $gte: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) },
-    });
+      artistId: new mongoose.Types.ObjectId(artistId),
+      date: { $gte: sevenDaysAgo, $lte: today }
+    })
+      .sort({ date: 1 })
+      .lean();
+
+    console.log(`Found ${past7.length} records for weekly stats`);
+
+    // For monthly stats, use the same UTC approach
+    const thirtyDaysAgo = new Date();
+    thirtyDaysAgo.setUTCDate(today.getUTCDate() - 29);
+    thirtyDaysAgo.setUTCHours(0, 0, 0, 0);
 
     const past30 = await DailyScore.find({
-      artistId,
-      date: { $gte: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) },
+      artistId: new mongoose.Types.ObjectId(artistId),
+      date: { $gte: thirtyDaysAgo, $lte: today }
     });
 
-    const weeklyTotal = past7.reduce((sum, e) => sum + e.totalScore, 0);
+    const weeklyPoints = past7.reduce((sum, e) => sum + e.totalScore, 0);
     const monthlyTotal = past30.reduce((sum, e) => sum + e.totalScore, 0);
 
-    // 1. Best Platform (based on breakdown score)
     const breakdown = latestScore?.breakdown || {};
     let bestPlatform = "N/A";
     let bestPlatformScore = 0;
@@ -125,7 +136,6 @@ exports.getArtistSummary = async (req, res) => {
       }
     }
 
-    // 2. Platform with most views
     const viewsMap = {
       Spotify: latestScore?.spotifyStreams || 0,
       YouTube: latestScore?.youtubeViews || 0,
@@ -140,33 +150,68 @@ exports.getArtistSummary = async (req, res) => {
       }
     }
 
-    // 3. Rank based on totalScore on same date
     let rank = null;
     let outOf = 0;
-    if (latestScore?.date) {
-      const topScores = await DailyScore.aggregate([
-        { $match: { date: latestScore.date } },
-        { $sort: { totalScore: -1 } },
-        {
-          $group: {
-            _id: "$artistId",
-            score: { $first: "$totalScore" },
-          },
-        },
-      ]);
+   if (latestScore?.date) {
+  const dayStart = new Date(latestScore.date);
+  dayStart.setUTCHours(0, 0, 0, 0);
 
-      outOf = topScores.length;
-      const rankIndex = topScores.findIndex(entry => entry._id.toString() === artistId.toString());
-      rank = rankIndex >= 0 ? rankIndex + 1 : null;
+  const dayEnd = new Date(latestScore.date);
+  dayEnd.setUTCHours(23, 59, 59, 999);
+
+  const topScores = await DailyScore.aggregate([
+  { 
+    $match: { 
+      date: { $gte: dayStart, $lte: dayEnd } 
+    } 
+  },
+  {
+    $group: {
+      _id: "$artistId",
+      score: { $sum: "$totalScore" } // sum all scores of the day
     }
+  },
+  { $sort: { score: -1, _id: 1 } } // sort by score, then by artistId for tie-break
+]);
+
+
+  outOf = topScores.length;
+  const rankIndex = topScores.findIndex(
+    entry => entry._id.toString() === artistId.toString()
+  );
+  rank = rankIndex >= 0 ? rankIndex + 1 : null;
+}
+
+
+    let topTracks = [];
+    if (artist.spotifyId) {
+      try {
+        const tracks = await getTopTracks(artist.spotifyId);
+        topTracks = tracks.slice(0, 5).map(track => ({
+          name: track.name,
+          spotifyUrl: track.external_urls?.spotify || null,
+        }));
+      } catch (err) {
+        console.error("Failed to fetch top tracks:", err.message);
+      }
+    }
+
+    const weeklyStats = past7.map(score => ({
+      date: score.date,
+      totalScore: score.totalScore,
+      breakdown: score.breakdown || {},
+    }));
+
+    console.log(`Weekly stats array length: ${weeklyStats.length}`);
 
     res.json({
       name: artist.name,
       spotifyId: artist.spotifyId,
       youtubeChannelId: artist.youtubeChannelId,
       chartmetricId: artist.chartmetricId || null,
+      image: artist.image || null,
       latestScore,
-      weeklyTotal,
+      weeklyPoints,
       monthlyTotal,
       bestPlatform,
       bestPlatformScore,
@@ -174,7 +219,10 @@ exports.getArtistSummary = async (req, res) => {
       mostViews,
       rank,
       outOf,
+      weeklyStats,
+      topTracks,
     });
+
   } catch (err) {
     console.error("Artist summary error:", err.message);
     res.status(500).json({ error: "Failed to fetch artist summary" });
@@ -184,6 +232,40 @@ exports.getArtistSummary = async (req, res) => {
 
 
 
+
+
+// exports.uploadArtistCSV = [
+//   upload.single("file"),
+//   async (req, res) => {
+//     if (!req.file) return res.status(400).json({ error: "CSV file missing." });
+
+//     const artists = [];
+
+//     fs.createReadStream(req.file.path)
+//       .pipe(csv())
+//       .on("data", (row) => {
+//         artists.push({
+//           name: row.name,
+//           image: row?.image || null,
+//           spotifyId: row.spotifyId,
+//           youtubeChannelId: row.youtubeChannelId,
+//           chartmetricId: row.chartmetricId,
+//           tiktokUsername: row?.tiktokUsername || null,
+//           genres: row.genres ? row.genres.split(";").map(g => g.trim()) : [],
+//         });
+//       })
+//       .on("end", async () => {
+//         try {
+//           const inserted = await Artist.insertMany(artists, { ordered: false });
+//           fs.unlinkSync(req.file.path); // Clean up
+//           res.json({ success: true, inserted: inserted.length });
+//         } catch (err) {
+//           console.error("Insert error:", err.message);
+//           res.status(500).json({ error: "Failed to insert some or all artists." });
+//         }
+//       });
+//   },
+// ];
 exports.uploadArtistCSV = [
   upload.single("file"),
   async (req, res) => {
@@ -206,13 +288,106 @@ exports.uploadArtistCSV = [
       })
       .on("end", async () => {
         try {
-          const inserted = await Artist.insertMany(artists, { ordered: false });
+          let insertedCount = 0;
+          let updatedCount = 0;
+
+          for (const artist of artists) {
+            const existing = await Artist.findOne({
+              $or: [
+                { spotifyId: artist.spotifyId },
+                { youtubeChannelId: artist.youtubeChannelId },
+                { chartmetricId: artist.chartmetricId }
+              ]
+            });
+
+            if (existing) {
+              const isSame =
+                existing.name === artist.name &&
+                existing.image === artist.image &&
+                existing.tiktokUsername === artist.tiktokUsername &&
+                JSON.stringify(existing.genres) === JSON.stringify(artist.genres);
+
+              if (!isSame) {
+                await Artist.updateOne({ _id: existing._id }, artist);
+                updatedCount++;
+              }
+              // Else skip as nothing changed
+            } else {
+              await Artist.create(artist);
+              insertedCount++;
+            }
+          }
+
           fs.unlinkSync(req.file.path); // Clean up
-          res.json({ success: true, inserted: inserted.length });
+          res.json({ success: true, inserted: insertedCount, updated: updatedCount });
+
         } catch (err) {
-          console.error("Insert error:", err.message);
-          res.status(500).json({ error: "Failed to insert some or all artists." });
+          console.error("Processing error:", err.message);
+          res.status(500).json({ error: "Error during processing." });
         }
       });
   },
 ];
+
+
+exports.debugArtistData = async (req, res) => {
+  const artistId = req.params.id;
+
+  try {
+    const artist = await Artist.findById(artistId);
+    if (!artist) return res.status(404).json({ error: "Artist not found" });
+
+    // Get all DailyScore records for this artist
+    const allScores = await DailyScore.find({ artistId })
+      .sort({ date: -1 })
+      .lean();
+
+    // Get the latest 10 dates from all DailyScore records
+    const latestDates = await DailyScore.find({}, { date: 1 })
+      .sort({ date: -1 })
+      .limit(10)
+      .lean();
+
+    // Calculate date range for debugging using UTC dates
+    const today = new Date();
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setUTCDate(today.getUTCDate() - 6);
+    
+    // Set time to start and end of day in UTC
+    sevenDaysAgo.setUTCHours(0, 0, 0, 0);
+    today.setUTCHours(23, 59, 59, 999);
+
+    res.json({
+      artist: {
+        name: artist.name,
+        id: artist._id,
+        spotifyId: artist.spotifyId
+      },
+      dateRange: {
+        today: today.toISOString(),
+        sevenDaysAgo: sevenDaysAgo.toISOString(),
+        searchRange: `${sevenDaysAgo.toISOString()} to ${today.toISOString()}`
+      },
+      totalScoresForArtist: allScores.length,
+      latestScoresForArtist: allScores.slice(0, 5).map(score => ({
+        date: score.date,
+        totalScore: score.totalScore
+      })),
+      latestDatesInCollection: latestDates.map(doc => doc.date),
+      weeklyStatsQuery: {
+        artistId: artistId,
+        dateRange: { $gte: sevenDaysAgo, $lte: today }
+      },
+      // Test the actual query
+      testQuery: {
+        artistId: new mongoose.Types.ObjectId(artistId),
+        date: { $gte: sevenDaysAgo, $lte: today }
+      }
+    });
+
+  } catch (err) {
+    console.error("Debug artist data error:", err.message);
+    res.status(500).json({ error: "Failed to debug artist data" });
+  }
+};
+

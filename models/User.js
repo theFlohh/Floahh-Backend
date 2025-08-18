@@ -7,9 +7,17 @@ const UserSchema = new mongoose.Schema({
   role: { type: String, enum: ["user", "admin"], default: "user" }, // Add role with default 'user'
   createdAt: { type: Date, default: Date.now },
   totalPoints: {
-  type: Number,
-  default: 0
-},
+    type: Number,
+    default: 0,
+  },
+  loginCount: {
+    type: Number,
+    default: 0,
+  },
+  profileImage: {
+    type: String,
+    default: null,
+  },
 });
 
 module.exports = mongoose.model("User", UserSchema);
