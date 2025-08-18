@@ -38,6 +38,10 @@ exports.getUserStats = async (req, res) => {
       teamName = teamAgg[0].teamName || null;
     }
 
+    // Resolve the user's team id for ranking comparisons
+    const myTeamDoc = await UserTeam.findOne({ userId }).select("_id");
+    const myTeamId = myTeamDoc?._id || null;
+
     // Global ranking: count how many users' drafted totals exceed current user's drafted total using a single aggregation
     let globalRanking = 1;
     const globalAgg = await UserTeam.aggregate([
@@ -59,6 +63,43 @@ exports.getUserStats = async (req, res) => {
     ]);
     const betterUsers = globalAgg[0]?.better || 0;
     globalRanking = betterUsers + 1;
+
+    // Weekly team ranking movement (numeric)
+    const now = new Date();
+    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const twoWeeksAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+
+    // Helper to compute per-team totals within a time window
+    async function computeTeamTotalsWithin(startDate, endDate) {
+      const list = await UserTeam.aggregate([
+        { $lookup: { from: "teammembers", localField: "_id", foreignField: "teamId", as: "members" } },
+        { $project: { teamId: "$_id", artistIds: "$members.artistId" } },
+        { $lookup: {
+            from: "dailyscores",
+            let: { artistIds: "$artistIds" },
+            pipeline: [
+              { $match: { $expr: { $in: ["$artistId", "$$artistIds"] }, date: { $gte: startDate, $lt: endDate } } },
+              { $group: { _id: null, total: { $sum: "$totalScore" } } }
+            ],
+            as: "scoreAgg"
+          } 
+        },
+        { $project: { teamId: 1, totalPoints: { $ifNull: [ { $arrayElemAt: ["$scoreAgg.total", 0] }, 0 ] } } }
+      ]);
+      return list;
+    }
+
+    const currentWeekList = await computeTeamTotalsWithin(weekAgo, now);
+    const previousWeekList = await computeTeamTotalsWithin(twoWeeksAgo, weekAgo);
+
+    const sortedCurrent = currentWeekList.sort((a, b) => b.totalPoints - a.totalPoints);
+    const sortedPrevious = previousWeekList.sort((a, b) => b.totalPoints - a.totalPoints);
+
+    const weeklyCurrentRank = myTeamId ? (sortedCurrent.findIndex(t => String(t.teamId) === String(myTeamId)) + 1 || null) : null;
+    const weeklyPreviousRank = myTeamId ? (sortedPrevious.findIndex(t => String(t.teamId) === String(myTeamId)) + 1 || null) : null;
+    const weeklyRankChange = (weeklyCurrentRank && weeklyPreviousRank)
+      ? (weeklyPreviousRank - weeklyCurrentRank)
+      : null;
 
     // Friends ranking: aggregate each friend's drafted total in one pipeline and compute current user's position
     let friendsRanking = null;
@@ -89,35 +130,7 @@ exports.getUserStats = async (req, res) => {
       friendsRanking = sorted.findIndex(m => String(m.id) === String(userId)) + 1 || null;
     }
 
-    // Get weekly rank status (high/low compared to previous week)
-    const now = new Date();
-    const weekAgo = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const twoWeeksAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
-
-    // Get current week's global ranking
-    const currentWeekUsers = await User.find({
-      createdAt: { $gte: weekAgo }
-    }).sort({ totalPoints: -1 });
-    
-    const currentWeekRank = currentWeekUsers.findIndex(u => u._id.toString() === userId.toString()) + 1;
-
-    // Get previous week's global ranking (if user existed)
-    const previousWeekUsers = await User.find({
-      createdAt: { $gte: twoWeeksAgo, $lt: weekAgo }
-    }).sort({ totalPoints: -1 });
-    
-    const previousWeekRank = previousWeekUsers.findIndex(u => u._id.toString() === userId.toString()) + 1;
-
-    let weeklyRankStatus = "stable";
-    if (currentWeekRank > 0 && previousWeekRank > 0) {
-      if (currentWeekRank < previousWeekRank) {
-        weeklyRankStatus = "high";
-      } else if (currentWeekRank > previousWeekRank) {
-        weeklyRankStatus = "low";
-      }
-    } else if (currentWeekRank > 0 && previousWeekRank === 0) {
-      weeklyRankStatus = "new";
-    }
+    // Removed old categorical weekly status; replaced with numeric weekly movement above
 
     // Get total number of users for percentage calculations
     const totalUsers = await User.countDocuments();
@@ -137,7 +150,9 @@ exports.getUserStats = async (req, res) => {
       globalRanking: globalRanking,
       globalRankPercentage: `${globalRankPercentage}%`,
       friendsRanking: friendsRanking || "No Friends Leaderboard",
-      weeklyRankStatus: weeklyRankStatus
+      weeklyCurrentRank: weeklyCurrentRank,
+      weeklyPreviousRank: weeklyPreviousRank,
+      weeklyRankChange: weeklyRankChange
     };
 
     res.status(200).json({

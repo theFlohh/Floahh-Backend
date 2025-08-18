@@ -13,6 +13,23 @@ exports.getDraftableArtists = async (req, res) => {
   try {
     const tiers = await Tier.find({ tier: category }).populate("artistId");
 
+    // Pre-compute drafting counts and denominators for percentage by category
+    const artistIdsInCategory = tiers
+      .filter(t => t.artistId)
+      .map(t => t.artistId._id);
+
+    // Total distinct teams that have drafted in this category (denominator)
+    const totalTeamsInCategory = (await TeamMember.distinct("teamId", { category })).length;
+
+    // Draft pick counts per artist within the same category (numerator)
+    const pickCountsAgg = await TeamMember.aggregate([
+      { $match: { category, artistId: { $in: artistIdsInCategory } } },
+      { $group: { _id: "$artistId", count: { $sum: 1 } } }
+    ]);
+    const pickCountByArtistId = new Map(
+      pickCountsAgg.map(doc => [doc._id.toString(), doc.count])
+    );
+
     const artistsWithData = await Promise.all(
       tiers.map(async (tier) => {
         if (!tier.artistId) return null;
@@ -95,12 +112,19 @@ exports.getDraftableArtists = async (req, res) => {
         ]);
         const totalScore = totalScoreAgg[0]?.totalScore || 0;
 
+        // ---------- DRAFTING PERCENTAGE (by category) ----------
+        const artistPickCount = pickCountByArtistId.get(tier.artistId._id.toString()) || 0;
+        const draftingPercentage = totalTeamsInCategory > 0
+          ? Math.round((artistPickCount / totalTeamsInCategory) * 100)
+          : 0;
+
         return {
           ...tier.artistId.toObject(),
           totalScore,
           rank,
           previousRank,
-          outOf
+          outOf,
+          draftingPercentage
         };
       })
     );
@@ -223,6 +247,26 @@ exports.getUserDraft = async (req, res) => {
 
     const teamMembers = await TeamMember.find({ teamId: userTeam._id }).populate("artistId");
 
+    // Pre-compute drafting denominators and pick counts per category for the user's artists
+    const userCategories = [...new Set(teamMembers.map(m => m.category))];
+    const totalTeamsByCategoryEntries = await Promise.all(
+      userCategories.map(async (cat) => {
+        const count = (await TeamMember.distinct("teamId", { category: cat })).length;
+        return [cat, count];
+      })
+    );
+    const totalTeamsByCategory = new Map(totalTeamsByCategoryEntries);
+
+    // For pick counts per artist (restricted to artists on the team and by their category)
+    const artistIds = teamMembers.map(m => m.artistId?._id).filter(Boolean);
+    const pickCountsAgg = await TeamMember.aggregate([
+      { $match: { artistId: { $in: artistIds } } },
+      { $group: { _id: { artistId: "$artistId", category: "$category" }, count: { $sum: 1 } } }
+    ]);
+    const pickCountsKeyed = new Map(
+      pickCountsAgg.map(doc => [`${doc._id.artistId.toString()}|${doc._id.category}`, doc.count])
+    );
+
     const enriched = await Promise.all(
       teamMembers.map(async (member) => {
         const scoreAgg = await DailyScore.aggregate([
@@ -292,7 +336,12 @@ exports.getUserDraft = async (req, res) => {
             totalScore,
             rank,
             previousRank,
-            outOf
+            outOf,
+            draftingPercentage: (() => {
+              const denominator = totalTeamsByCategory.get(member.category) || 0;
+              const numerator = pickCountsKeyed.get(`${member.artistId._id.toString()}|${member.category}`) || 0;
+              return denominator > 0 ? Math.round((numerator / denominator) * 100) : 0;
+            })()
           }
         };
       })
@@ -384,43 +433,71 @@ exports.updateDraft = async (req, res) => {
     if (!userTeam) {
       return res.status(404).json({ error: "User team not found" });
     }
-    // Check if 12 hours have passed since creation
-    const now = new Date();
-    const createdAt = new Date(userTeam.createdAt);
-    const hoursDiff = (now - createdAt) / (1000 * 60 * 60);
-    if (hoursDiff > 12) {
-      return res.status(403).json({ error: "You can only update your draft within 12 hours from creation." });
-    }
-    // Update teamName if provided
-    if (teamName) {
-      userTeam.teamName = teamName;
+    // Update teamName if provided (always allowed, independent of lock)
+    if (Object.prototype.hasOwnProperty.call(req.body, "teamName")) {
+      userTeam.teamName = teamName ?? null;
       await userTeam.save();
     }
-    // Update user profile image if provided as URL or uploaded file
+    // Update user profile image if provided as URL or uploaded file (always allowed)
     if (req.file && req.file.filename) {
       await User.findByIdAndUpdate(userId, { profileImage: `/uploads/profile/${req.file.filename}` }, { new: true });
     } else if (Object.prototype.hasOwnProperty.call(req.body, "profileImage")) {
       await User.findByIdAndUpdate(userId, { profileImage: profileImage ?? null }, { new: true });
     }
-    // If draftedArtists are provided, replace team members
-    if (Array.isArray(draftedArtists) && draftedArtists.length > 0) {
-      // Remove old team members
-      await TeamMember.deleteMany({ teamId: userTeam._id });
-      // Add new team members
-      const teamMembers = await Promise.all(
-        draftedArtists.map(async (artistId) => {
-          const category = await determineCategory(artistId);
-          return {
-            teamId: userTeam._id,
-            artistId,
-            category,
-          };
-        })
-      );
-      await TeamMember.insertMany(teamMembers);
+
+    // If draftedArtists are provided, enforce 7-day lock for team members only
+    if (Array.isArray(draftedArtists)) {
+      // Compare with existing composition; if identical, do not treat as a composition change
+      const existingMembers = await TeamMember.find({ teamId: userTeam._id }).select("artistId");
+      const existingIds = new Set(existingMembers.map(m => String(m.artistId)));
+      const incomingIds = new Set(draftedArtists.map(id => String(id)));
+      const isSameSize = existingIds.size === incomingIds.size;
+      const isSameSet = isSameSize && Array.from(existingIds).every(id => incomingIds.has(id));
+
+      if (draftedArtists.length > 0 && !isSameSet) {
+        const now = new Date();
+        const referenceTime = userTeam.lastUpdatedAt ? new Date(userTeam.lastUpdatedAt) : new Date(userTeam.createdAt);
+        const unlockTime = new Date(referenceTime.getTime() + 7 * 24 * 60 * 60 * 1000);
+        if (now < unlockTime) {
+          const msRemaining = unlockTime.getTime() - now.getTime();
+          const days = Math.floor(msRemaining / (24 * 60 * 60 * 1000));
+          const hours = Math.floor((msRemaining % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
+          const minutes = Math.floor((msRemaining % (60 * 60 * 1000)) / (60 * 1000));
+          return res.status(403).json({
+            error: "Draft is locked",
+            message: `You can update your team members in ${days}d ${hours}h ${minutes}m. Team composition updates are allowed every 7 days after creation or last update.`,
+            unlockAt: unlockTime
+          });
+        }
+        // Remove old team members
+        await TeamMember.deleteMany({ teamId: userTeam._id });
+        // Add new team members
+        const teamMembers = await Promise.all(
+          draftedArtists.map(async (artistId) => {
+            const category = await determineCategory(artistId);
+            return {
+              teamId: userTeam._id,
+              artistId,
+              category,
+            };
+          })
+        );
+        await TeamMember.insertMany(teamMembers);
+
+        // Mark the time of this successful team member update to start next 7-day lock
+        userTeam.lastUpdatedAt = new Date();
+        await userTeam.save();
+
+        const nextUnlockAt = new Date(userTeam.lastUpdatedAt.getTime() + 7 * 24 * 60 * 60 * 1000);
+        return res.status(200).json({
+          message: "Team members updated successfully. Your team is now locked for 7 days.",
+          lockedUntil: nextUnlockAt
+        });
+      }
     }
 
-    res.status(200).json({ message: "Draft updated successfully" });
+    // If only name/profile were updated
+    return res.status(200).json({ message: "Profile/Team info updated successfully" });
   } catch (err) {
     console.error("Error updating draft:", err.message);
     res.status(500).json({ error: "Failed to update draft" });

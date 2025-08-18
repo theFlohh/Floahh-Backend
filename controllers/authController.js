@@ -4,6 +4,7 @@ const User = require("../models/User");
 const UserTeam = require("../models/UserTeam");
 const TeamMember = require("../models/TeamMember");
 const DailyScore = require("../models/DailyScore");
+const Artist = require("../models/Artist");
 
 const JWT_SECRET = process.env.JWT_SECRET; // Store securely in .env
 const ADMIN_SECRET = process.env.ADMIN_SECRET || "supersecret"; // Add this to your .env for security
@@ -139,23 +140,27 @@ exports.fetchAllUsers = async (req, res) => {
           };
         }
 
-        const teamMembers = await TeamMember.find({
-          teamId: userTeam._id,
-        }).populate("artistId");
+        // Fetch raw members to preserve artist ObjectIds even if artist doc is missing
+        const rawMembers = await TeamMember.find({ teamId: userTeam._id }).lean();
+        const artistIds = rawMembers.map(m => m.artistId).filter(Boolean);
+        const artists = await Artist.find({ _id: { $in: artistIds } }).lean();
+        const artistById = new Map(artists.map(a => [a._id.toString(), a]));
 
         const enrichedMembers = await Promise.all(
-          teamMembers.map(async (member) => {
+          rawMembers.map(async (member) => {
+            const artistObjectId = member.artistId;
             const scoreAgg = await DailyScore.aggregate([
-              { $match: { artistId: member.artistId._id } },
+              { $match: { artistId: artistObjectId } },
               { $group: { _id: null, totalScore: { $sum: "$totalScore" } } },
             ]);
-
             const totalScore = scoreAgg[0]?.totalScore || 0;
 
+            const baseArtist = artistById.get(String(artistObjectId)) || { _id: artistObjectId };
+
             return {
-              ...member.toObject(),
+              ...member,
               artistId: {
-                ...member.artistId.toObject(),
+                ...baseArtist,
                 totalScore,
               },
             };
