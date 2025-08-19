@@ -69,26 +69,23 @@ exports.getDraftableArtists = async (req, res) => {
           rank = rankIndex >= 0 ? rankIndex + 1 : null;
 
           /** ---------- PREVIOUS AVAILABLE RANK ---------- **/
-          let searchDate = new Date(dayStart);
-          searchDate.setUTCDate(searchDate.getUTCDate() - 1); // start 1 day before today
-          let foundPrevRank = false;
-          let safetyCounter = 0;
+          const previousScoreDoc = await DailyScore.findOne({
+            artistId: tier.artistId._id,
+            date: { $lt: dayStart }
+          })
+            .sort({ date: -1 })
+            .lean();
 
-          while (!foundPrevRank && safetyCounter < 30) { // max 30 days back
-            const prevStart = new Date(searchDate);
+          if (previousScoreDoc?.date) {
+            const prevStart = new Date(previousScoreDoc.date);
             prevStart.setUTCHours(0, 0, 0, 0);
 
-            const prevEnd = new Date(searchDate);
+            const prevEnd = new Date(previousScoreDoc.date);
             prevEnd.setUTCHours(23, 59, 59, 999);
 
             const prevRankingList = await DailyScore.aggregate([
               { $match: { date: { $gte: prevStart, $lte: prevEnd } } },
-              {
-                $group: {
-                  _id: "$artistId",
-                  score: { $sum: "$totalScore" }
-                }
-              },
+              { $group: { _id: "$artistId", score: { $sum: "$totalScore" } } },
               { $sort: { score: -1, _id: 1 } }
             ]);
 
@@ -97,10 +94,6 @@ exports.getDraftableArtists = async (req, res) => {
                 r => r._id.toString() === tier.artistId._id.toString()
               );
               previousRank = prevRankIndex >= 0 ? prevRankIndex + 1 : null;
-              foundPrevRank = true;
-            } else {
-              searchDate.setUTCDate(searchDate.getUTCDate() - 1);
-              safetyCounter++;
             }
           }
         }
@@ -300,16 +293,18 @@ exports.getUserDraft = async (req, res) => {
           const rankIndex = rankingList.findIndex(r => r._id.toString() === member.artistId._id.toString());
           rank = rankIndex >= 0 ? rankIndex + 1 : null;
 
-          let searchDate = new Date(dayStart);
-          searchDate.setUTCDate(searchDate.getUTCDate() - 1);
-          let foundPrevRank = false;
-          let safetyCounter = 0;
+          const previousScoreDoc = await DailyScore.findOne({
+            artistId: member.artistId._id,
+            date: { $lt: dayStart }
+          })
+            .sort({ date: -1 })
+            .lean();
 
-          while (!foundPrevRank && safetyCounter < 30) {
-            const prevStart = new Date(searchDate);
+          if (previousScoreDoc?.date) {
+            const prevStart = new Date(previousScoreDoc.date);
             prevStart.setUTCHours(0, 0, 0, 0);
 
-            const prevEnd = new Date(searchDate);
+            const prevEnd = new Date(previousScoreDoc.date);
             prevEnd.setUTCHours(23, 59, 59, 999);
 
             const prevRankingList = await DailyScore.aggregate([
@@ -321,10 +316,6 @@ exports.getUserDraft = async (req, res) => {
             if (prevRankingList.length > 0) {
               const prevRankIndex = prevRankingList.findIndex(r => r._id.toString() === member.artistId._id.toString());
               previousRank = prevRankIndex >= 0 ? prevRankIndex + 1 : null;
-              foundPrevRank = true;
-            } else {
-              searchDate.setUTCDate(searchDate.getUTCDate() - 1);
-              safetyCounter++;
             }
           }
         }

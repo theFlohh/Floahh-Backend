@@ -5,9 +5,10 @@ const UserTeam = require("../models/UserTeam");
 const TeamMember = require("../models/TeamMember");
 const DailyScore = require("../models/DailyScore");
 const Artist = require("../models/Artist");
+const path = require("path");
 
-const JWT_SECRET = process.env.JWT_SECRET; // Store securely in .env
-const ADMIN_SECRET = process.env.ADMIN_SECRET || "supersecret"; // Add this to your .env for security
+const JWT_SECRET = process.env.JWT_SECRET;
+const ADMIN_SECRET = process.env.ADMIN_SECRET || "supersecret";
 
 exports.register = async (req, res) => {
   const { name, email, password, role } = req.body;
@@ -18,14 +19,11 @@ exports.register = async (req, res) => {
 
     const hash = await bcrypt.hash(password, 10);
     let userRole = "user";
-    // Debug: log incoming role and header
     console.log("Requested role:", role);
     console.log("x-admin-secret header:", req.headers["x-admin-secret"]);
-    // Allow admin creation only if x-admin-secret header matches
     if (role === "admin" && req.headers["x-admin-secret"] === ADMIN_SECRET) {
       userRole = "admin";
     }
-    // Debug: log what will be saved
     console.log("Final userRole to save:", userRole);
     const user = await User.create({
       name,
@@ -33,7 +31,6 @@ exports.register = async (req, res) => {
       password: hash,
       role: userRole,
     });
-    // Debug: log what was saved
     console.log("User created:", user);
 
     res.status(201).json({ message: "User registered successfully", user });
@@ -61,7 +58,7 @@ exports.login = async (req, res) => {
         id: user._id,
         name: user.name,
         email: user.email,
-        role: user.role, // Return the correct role here
+        role: user.role,
       },
     });
   } catch (err) {
@@ -115,15 +112,6 @@ exports.getUserPointsBreakdown = async (req, res) => {
   }
 };
 
-// exports.fetchAllUsers = async (req, res) => {
-//   try {
-//     const users = await User.find({}, { password: 0 });
-//     res.json(users);
-//   } catch (err) {
-//     console.error("Error fetching users:", err.message);
-//     res.status(500).json({ error: "Failed to fetch users" });
-//   }
-// };
 exports.fetchAllUsers = async (req, res) => {
   try {
     // Only fetch users with role "user" (exclude admins)
@@ -140,7 +128,6 @@ exports.fetchAllUsers = async (req, res) => {
           };
         }
 
-        // Fetch raw members to preserve artist ObjectIds even if artist doc is missing
         const rawMembers = await TeamMember.find({ teamId: userTeam._id }).lean();
         const artistIds = rawMembers.map(m => m.artistId).filter(Boolean);
         const artists = await Artist.find({ _id: { $in: artistIds } }).lean();
@@ -184,3 +171,80 @@ exports.fetchAllUsers = async (req, res) => {
     res.status(500).json({ error: "Failed to fetch users" });
   }
 };
+  exports.updateUser = async (req, res) => {
+    const userId = req.user._id;
+    const { name, email, password } = req.body;
+
+    try {
+      const user = await User.findById(userId);
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      // ✅ Check if email is being updated and already taken
+      if (email && email !== user.email) {
+        const existing = await User.findOne({ email });
+        if (existing) {
+          return res.status(400).json({ error: "Email already in use" });
+        }
+        user.email = email;
+      }
+
+      // ✅ Update fields if provided
+      if (name) user.name = name;
+
+      // ✅ Handle profile image from multer
+      if (req.file) {
+        // absolute URL generate
+        const baseUrl = `${req.protocol}://${req.get("host")}`;
+        user.profileImage = `${baseUrl}/uploads/profile/${req.file.filename}`;
+      }
+
+      // ✅ Hash new password if provided
+      if (password) {
+        const hash = await bcrypt.hash(password, 10);
+        user.password = hash;
+      }
+
+      await user.save();
+
+      res.json({
+        message: "User updated successfully",
+        user: {
+          id: user._id,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          profileImage: user.profileImage,
+        },
+      });
+    } catch (err) {
+      console.error("Update user error:", err.message);
+      res.status(500).json({ error: "Failed to update user" });
+    }
+  };
+  exports.getUserDetails = async (req, res) => {
+    const userId = req.user._id; // JWT middleware se aata hai
+
+    try {
+      const user = await User.findById(userId).lean();
+      if (!user) return res.status(404).json({ error: "User not found" });
+
+      res.json({
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        password: user.password, // ⚠️ hashed password
+        role: user.role,
+        profileImage: user.profileImage,
+        totalPoints: user.totalPoints,
+        loginCount: user.loginCount,
+        createdAt: user.createdAt,
+      });
+    } catch (err) {
+      console.error("Get user details error:", err.message);
+      res.status(500).json({ error: "Failed to fetch user details" });
+    }
+  };
+
+
+
+
