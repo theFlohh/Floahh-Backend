@@ -229,7 +229,12 @@ exports.submitDraft = async (req, res) => {
 
 
 exports.getUserDraft = async (req, res) => {
+  if (!req.user.id || !req.user._id) {
+    return res.status(401).json({ error: "Unauthorized: User not found in request" });
+  }
+
   const userId = req.user._id;
+  console.log("User ID is", userId);
 
   try {
     const user = await User.findById(userId).select("name profileImage");
@@ -239,8 +244,9 @@ exports.getUserDraft = async (req, res) => {
     if (!userTeam) return res.status(404).json({ error: "User team not found" });
 
     const teamMembers = await TeamMember.find({ teamId: userTeam._id }).populate("artistId");
+    console.log("Team members are", teamMembers);
 
-    // Pre-compute drafting denominators and pick counts per category for the user's artists
+    // Pre-compute drafting denominators and pick counts per category
     const userCategories = [...new Set(teamMembers.map(m => m.category))];
     const totalTeamsByCategoryEntries = await Promise.all(
       userCategories.map(async (cat) => {
@@ -250,7 +256,7 @@ exports.getUserDraft = async (req, res) => {
     );
     const totalTeamsByCategory = new Map(totalTeamsByCategoryEntries);
 
-    // For pick counts per artist (restricted to artists on the team and by their category)
+    // Pick counts per artist
     const artistIds = teamMembers.map(m => m.artistId?._id).filter(Boolean);
     const pickCountsAgg = await TeamMember.aggregate([
       { $match: { artistId: { $in: artistIds } } },
@@ -262,6 +268,20 @@ exports.getUserDraft = async (req, res) => {
 
     const enriched = await Promise.all(
       teamMembers.map(async (member) => {
+        // ✅ Agar artistId null hai to safe return
+        if (!member.artistId) {
+          return {
+            ...member.toObject(),
+            artistId: {
+              totalScore: 0,
+              rank: null,
+              previousRank: null,
+              outOf: 0,
+              draftingPercentage: 0
+            }
+          };
+        }
+
         const scoreAgg = await DailyScore.aggregate([
           { $match: { artistId: member.artistId._id } },
           { $group: { _id: null, totalScore: { $sum: "$totalScore" } } },
@@ -339,17 +359,17 @@ exports.getUserDraft = async (req, res) => {
     );
 
     // Team total points
-    const teamTotalPoints = enriched.reduce((sum, m) => sum + m.artistId.totalScore, 0);
+    const teamTotalPoints = enriched.reduce((sum, m) => sum + (m.artistId?.totalScore || 0), 0);
 
-    // Weekly points (keep only points, remove ranking)
+    // Weekly points
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
     const weeklyScores = await DailyScore.aggregate([
-      { $match: { artistId: { $in: enriched.map(m => m.artistId._id) }, date: { $gte: weekAgo } } },
+      { $match: { artistId: { $in: enriched.map(m => m.artistId?._id).filter(Boolean) }, date: { $gte: weekAgo } } },
       { $group: { _id: null, weeklyPoints: { $sum: "$totalScore" } } }
     ]);
     const weeklyPoints = weeklyScores[0]?.weeklyPoints || 0;
 
-    // Calculate team global ranking
+    // Global team ranking
     const allTeams = await UserTeam.find();
     const teamPointsList = await Promise.all(
       allTeams.map(async (team) => {
@@ -357,7 +377,7 @@ exports.getUserDraft = async (req, res) => {
         if (members.length === 0) return { teamId: team._id, totalPoints: 0 };
 
         const pointsAgg = await DailyScore.aggregate([
-          { $match: { artistId: { $in: members.map(m => m.artistId) } } },
+          { $match: { artistId: { $in: members.map(m => m.artistId).filter(Boolean) } } },
           { $group: { _id: null, totalPoints: { $sum: "$totalScore" } } }
         ]);
         return { teamId: team._id, totalPoints: pointsAgg[0]?.totalPoints || 0 };
@@ -377,7 +397,7 @@ exports.getUserDraft = async (req, res) => {
       userProfileImage: userProfileImageUrl,
       teamTotalPoints,
       weeklyPoints,
-      teamRank, // new global team rank
+      teamRank,
       totalTeams: allTeams.length,
       userTeam,
       teamMembers: enriched
