@@ -11,123 +11,94 @@ exports.getDraftableArtists = async (req, res) => {
   const { category } = req.query;
 
   try {
-    const tiers = await Tier.find({ tier: category }).populate("artistId");
+    // 1️⃣ Fetch all tiers with artist populated
+    const tiers = await Tier.find({ tier: category }).populate("artistId").lean();
+    const artistIds = tiers.filter(t => t.artistId).map(t => t.artistId._id);
 
-    // Pre-compute drafting counts and denominators for percentage by category
-    const artistIdsInCategory = tiers
-      .filter(t => t.artistId)
-      .map(t => t.artistId._id);
+    // 2️⃣ Total distinct teams in this category
+    const totalTeamsInCategory = await TeamMember.distinct("teamId", { category });
+    const totalTeamsCount = totalTeamsInCategory.length;
 
-    // Total distinct teams that have drafted in this category (denominator)
-    const totalTeamsInCategory = (await TeamMember.distinct("teamId", { category })).length;
-
-    // Draft pick counts per artist within the same category (numerator)
+    // 3️⃣ Draft pick counts per artist
     const pickCountsAgg = await TeamMember.aggregate([
-      { $match: { category, artistId: { $in: artistIdsInCategory } } },
+      { $match: { category, artistId: { $in: artistIds } } },
       { $group: { _id: "$artistId", count: { $sum: 1 } } }
     ]);
-    const pickCountByArtistId = new Map(
-      pickCountsAgg.map(doc => [doc._id.toString(), doc.count])
-    );
+    const pickCountMap = new Map(pickCountsAgg.map(doc => [doc._id.toString(), doc.count]));
 
-    const artistsWithData = await Promise.all(
-      tiers.map(async (tier) => {
-        if (!tier.artistId) return null;
+    // 4️⃣ Fetch all scores for today and previous day in bulk
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
 
-        // Latest score record
-        const latestScore = await DailyScore.findOne({ artistId: tier.artistId._id })
-          .sort({ date: -1 })
-          .lean();
+    const todayEnd = new Date(todayStart);
+    todayEnd.setUTCHours(23, 59, 59, 999);
 
-        let rank = null;
-        let previousRank = null;
-        let outOf = 0;
+    // Scores for today
+    const todayScores = await DailyScore.aggregate([
+      { $match: { artistId: { $in: artistIds }, date: { $gte: todayStart, $lte: todayEnd } } },
+      { $group: { _id: "$artistId", score: { $sum: "$totalScore" } } }
+    ]);
 
-        if (latestScore?.date) {
-          /** ---------- TODAY's RANK ---------- **/
-          const dayStart = new Date(latestScore.date);
-          dayStart.setUTCHours(0, 0, 0, 0);
+    // Scores for previous day
+    const prevScores = await DailyScore.aggregate([
+      { $match: { artistId: { $in: artistIds }, date: { $lt: todayStart } } },
+      { $sort: { date: -1 } },
+      { $group: { _id: "$artistId", score: { $first: "$totalScore" } } }
+    ]);
 
-          const dayEnd = new Date(latestScore.date);
-          dayEnd.setUTCHours(23, 59, 59, 999);
+    // Total scores per artist
+    const totalScoresAgg = await DailyScore.aggregate([
+      { $match: { artistId: { $in: artistIds } } },
+      { $group: { _id: "$artistId", totalScore: { $sum: "$totalScore" } } }
+    ]);
 
-          const rankingList = await DailyScore.aggregate([
-            { $match: { date: { $gte: dayStart, $lte: dayEnd } } },
-            {
-              $group: {
-                _id: "$artistId",
-                score: { $sum: "$totalScore" }
-              }
-            },
-            { $sort: { score: -1, _id: 1 } }
-          ]);
+    const totalScoreMap = new Map(totalScoresAgg.map(doc => [doc._id.toString(), doc.totalScore]));
+    
+    // 5️⃣ Compute ranking in Node.js
+    const sortAndMapRanks = (scoreArray) => {
+      const sorted = [...scoreArray].sort((a, b) => b.score - a.score);
+      const rankMap = new Map();
+      sorted.forEach((doc, idx) => rankMap.set(doc._id.toString(), idx + 1));
+      return rankMap;
+    };
 
-          outOf = rankingList.length;
-          const rankIndex = rankingList.findIndex(
-            r => r._id.toString() === tier.artistId._id.toString()
-          );
-          rank = rankIndex >= 0 ? rankIndex + 1 : null;
+    const todayRankMap = sortAndMapRanks(todayScores);
+    const prevRankMap = sortAndMapRanks(prevScores);
 
-          /** ---------- PREVIOUS AVAILABLE RANK ---------- **/
-          const previousScoreDoc = await DailyScore.findOne({
-            artistId: tier.artistId._id,
-            date: { $lt: dayStart }
-          })
-            .sort({ date: -1 })
-            .lean();
+    // 6️⃣ Build final response
+    const artistsWithData = tiers.map(tier => {
+      if (!tier.artistId) return null;
+      const artistIdStr = tier.artistId._id.toString();
 
-          if (previousScoreDoc?.date) {
-            const prevStart = new Date(previousScoreDoc.date);
-            prevStart.setUTCHours(0, 0, 0, 0);
+      const rank = todayRankMap.get(artistIdStr) || null;
+      const previousRank = prevRankMap.get(artistIdStr) || null;
+      const totalScore = totalScoreMap.get(artistIdStr) || 0;
 
-            const prevEnd = new Date(previousScoreDoc.date);
-            prevEnd.setUTCHours(23, 59, 59, 999);
+      const artistPickCount = pickCountMap.get(artistIdStr) || 0;
+      const draftingPercentage = totalTeamsCount
+        ? Math.round((artistPickCount / totalTeamsCount) * 100)
+        : 0;
 
-            const prevRankingList = await DailyScore.aggregate([
-              { $match: { date: { $gte: prevStart, $lte: prevEnd } } },
-              { $group: { _id: "$artistId", score: { $sum: "$totalScore" } } },
-              { $sort: { score: -1, _id: 1 } }
-            ]);
+      const outOf = todayScores.length;
 
-            if (prevRankingList.length > 0) {
-              const prevRankIndex = prevRankingList.findIndex(
-                r => r._id.toString() === tier.artistId._id.toString()
-              );
-              previousRank = prevRankIndex >= 0 ? prevRankIndex + 1 : null;
-            }
-          }
-        }
+      return {
+        ...tier.artistId,
+        totalScore,
+        rank,
+        previousRank,
+        outOf,
+        draftingPercentage
+      };
+    }).filter(a => a !== null);
 
-        /** ---------- TOTAL SCORE ---------- **/
-        const totalScoreAgg = await DailyScore.aggregate([
-          { $match: { artistId: tier.artistId._id } },
-          { $group: { _id: null, totalScore: { $sum: "$totalScore" } } },
-        ]);
-        const totalScore = totalScoreAgg[0]?.totalScore || 0;
-
-        // ---------- DRAFTING PERCENTAGE (by category) ----------
-        const artistPickCount = pickCountByArtistId.get(tier.artistId._id.toString()) || 0;
-        const draftingPercentage = totalTeamsInCategory > 0
-          ? Math.round((artistPickCount / totalTeamsInCategory) * 100)
-          : 0;
-
-        return {
-          ...tier.artistId.toObject(),
-          totalScore,
-          rank,
-          previousRank,
-          outOf,
-          draftingPercentage
-        };
-      })
-    );
-
-    res.json(artistsWithData.filter(a => a));
+    res.json(artistsWithData);
   } catch (err) {
     console.error("Error fetching draftable artists:", err);
     res.status(500).json({ error: "Failed to fetch draftable artists" });
   }
 };
+
+
 
 
 
@@ -229,164 +200,161 @@ exports.submitDraft = async (req, res) => {
 
 
 exports.getUserDraft = async (req, res) => {
+  if (!req.user?._id) {
+    return res.status(401).json({ error: "Unauthorized: User not found in request" });
+  }
+
   const userId = req.user._id;
 
   try {
-    const user = await User.findById(userId).select("name profileImage");
-    if (!user) return res.status(404).json({ error: "User not found" });
+    // 1️⃣ Fetch user and their team
+    const [user, userTeam] = await Promise.all([
+      User.findById(userId).select("name profileImage").lean(),
+      UserTeam.findOne({ userId }).lean()
+    ]);
 
-    const userTeam = await UserTeam.findOne({ userId });
+    if (!user) return res.status(404).json({ error: "User not found" });
     if (!userTeam) return res.status(404).json({ error: "User team not found" });
 
-    const teamMembers = await TeamMember.find({ teamId: userTeam._id }).populate("artistId");
+    // 2️⃣ Fetch all team members in one query
+    const teamMembers = await TeamMember.find({ teamId: userTeam._id })
+      .populate("artistId")
+      .lean();
 
-    // Pre-compute drafting denominators and pick counts per category for the user's artists
-    const userCategories = [...new Set(teamMembers.map(m => m.category))];
-    const totalTeamsByCategoryEntries = await Promise.all(
-      userCategories.map(async (cat) => {
-        const count = (await TeamMember.distinct("teamId", { category: cat })).length;
-        return [cat, count];
-      })
-    );
-    const totalTeamsByCategory = new Map(totalTeamsByCategoryEntries);
-
-    // For pick counts per artist (restricted to artists on the team and by their category)
     const artistIds = teamMembers.map(m => m.artistId?._id).filter(Boolean);
+
+    // 3️⃣ Fetch total draft counts per category & artist in bulk
+    const userCategories = [...new Set(teamMembers.map(m => m.category))];
+
+    const totalTeamsByCategoryAgg = await TeamMember.aggregate([
+      { $match: { category: { $in: userCategories } } },
+      { $group: { _id: "$category", teams: { $addToSet: "$teamId" } } }
+    ]);
+    const totalTeamsByCategory = new Map(
+      totalTeamsByCategoryAgg.map(doc => [doc._id, doc.teams.length])
+    );
+
     const pickCountsAgg = await TeamMember.aggregate([
       { $match: { artistId: { $in: artistIds } } },
       { $group: { _id: { artistId: "$artistId", category: "$category" }, count: { $sum: 1 } } }
     ]);
-    const pickCountsKeyed = new Map(
-      pickCountsAgg.map(doc => [`${doc._id.artistId.toString()}|${doc._id.category}`, doc.count])
+    const pickCountsMap = new Map(
+      pickCountsAgg.map(doc => [`${doc._id.artistId}|${doc._id.category}`, doc.count])
     );
 
-    const enriched = await Promise.all(
-      teamMembers.map(async (member) => {
-        const scoreAgg = await DailyScore.aggregate([
-          { $match: { artistId: member.artistId._id } },
-          { $group: { _id: null, totalScore: { $sum: "$totalScore" } } },
-        ]);
-        const totalScore = scoreAgg[0]?.totalScore || 0;
+    // 4️⃣ Fetch all DailyScore data in bulk
+    const now = new Date();
+    const weekAgo = new Date(now);
+    weekAgo.setDate(now.getDate() - 7);
 
-        const latestScore = await DailyScore.findOne({ artistId: member.artistId._id })
-          .sort({ date: -1 })
-          .lean();
-
-        let rank = null;
-        let previousRank = null;
-        let outOf = 0;
-
-        if (latestScore?.date) {
-          const dayStart = new Date(latestScore.date);
-          dayStart.setUTCHours(0, 0, 0, 0);
-
-          const dayEnd = new Date(latestScore.date);
-          dayEnd.setUTCHours(23, 59, 59, 999);
-
-          const rankingList = await DailyScore.aggregate([
-            { $match: { date: { $gte: dayStart, $lte: dayEnd } } },
-            { $group: { _id: "$artistId", score: { $sum: "$totalScore" } } },
-            { $sort: { score: -1, _id: 1 } }
-          ]);
-
-          outOf = rankingList.length;
-          const rankIndex = rankingList.findIndex(r => r._id.toString() === member.artistId._id.toString());
-          rank = rankIndex >= 0 ? rankIndex + 1 : null;
-
-          const previousScoreDoc = await DailyScore.findOne({
-            artistId: member.artistId._id,
-            date: { $lt: dayStart }
-          })
-            .sort({ date: -1 })
-            .lean();
-
-          if (previousScoreDoc?.date) {
-            const prevStart = new Date(previousScoreDoc.date);
-            prevStart.setUTCHours(0, 0, 0, 0);
-
-            const prevEnd = new Date(previousScoreDoc.date);
-            prevEnd.setUTCHours(23, 59, 59, 999);
-
-            const prevRankingList = await DailyScore.aggregate([
-              { $match: { date: { $gte: prevStart, $lte: prevEnd } } },
-              { $group: { _id: "$artistId", score: { $sum: "$totalScore" } } },
-              { $sort: { score: -1, _id: 1 } }
-            ]);
-
-            if (prevRankingList.length > 0) {
-              const prevRankIndex = prevRankingList.findIndex(r => r._id.toString() === member.artistId._id.toString());
-              previousRank = prevRankIndex >= 0 ? prevRankIndex + 1 : null;
-            }
+    const scoresAgg = await DailyScore.aggregate([
+      { $match: { artistId: { $in: artistIds } } },
+      {
+        $group: {
+          _id: "$artistId",
+          totalScore: { $sum: "$totalScore" },
+          latestScore: { $last: "$totalScore" },
+          latestDate: { $last: "$date" },
+          weeklyScore: {
+            $sum: { $cond: [{ $gte: ["$date", weekAgo] }, "$totalScore", 0] }
           }
         }
-
-        return {
-          ...member.toObject(),
-          artistId: {
-            ...member.artistId.toObject(),
-            totalScore,
-            rank,
-            previousRank,
-            outOf,
-            draftingPercentage: (() => {
-              const denominator = totalTeamsByCategory.get(member.category) || 0;
-              const numerator = pickCountsKeyed.get(`${member.artistId._id.toString()}|${member.category}`) || 0;
-              return denominator > 0 ? Math.round((numerator / denominator) * 100) : 0;
-            })()
-          }
-        };
-      })
-    );
-
-    // Team total points
-    const teamTotalPoints = enriched.reduce((sum, m) => sum + m.artistId.totalScore, 0);
-
-    // Weekly points (keep only points, remove ranking)
-    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-    const weeklyScores = await DailyScore.aggregate([
-      { $match: { artistId: { $in: enriched.map(m => m.artistId._id) }, date: { $gte: weekAgo } } },
-      { $group: { _id: null, weeklyPoints: { $sum: "$totalScore" } } }
+      }
     ]);
-    const weeklyPoints = weeklyScores[0]?.weeklyPoints || 0;
 
-    // Calculate team global ranking
-    const allTeams = await UserTeam.find();
-    const teamPointsList = await Promise.all(
-      allTeams.map(async (team) => {
-        const members = await TeamMember.find({ teamId: team._id });
-        if (members.length === 0) return { teamId: team._id, totalPoints: 0 };
+    const scoreMap = new Map(scoresAgg.map(doc => [doc._id.toString(), doc]));
 
-        const pointsAgg = await DailyScore.aggregate([
-          { $match: { artistId: { $in: members.map(m => m.artistId) } } },
-          { $group: { _id: null, totalPoints: { $sum: "$totalScore" } } }
-        ]);
-        return { teamId: team._id, totalPoints: pointsAgg[0]?.totalPoints || 0 };
-      })
-    );
+    // 5️⃣ Compute today and previous rankings in Node.js
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+    const todayScores = await DailyScore.aggregate([
+      { $match: { artistId: { $in: artistIds }, date: { $gte: todayStart } } },
+      { $group: { _id: "$artistId", score: { $sum: "$totalScore" } } }
+    ]);
 
-    const sortedTeams = teamPointsList.sort((a, b) => b.totalPoints - a.totalPoints);
-    const teamRank = sortedTeams.findIndex(team => team.teamId.toString() === userTeam._id.toString()) + 1;
+    const prevScores = await DailyScore.aggregate([
+      { $match: { artistId: { $in: artistIds }, date: { $lt: todayStart } } },
+      { $sort: { date: -1 } },
+      { $group: { _id: "$artistId", score: { $first: "$totalScore" } } }
+    ]);
 
-    // Profile image URL
+    const rankMap = (arr) => {
+      const sorted = [...arr].sort((a, b) => b.score - a.score);
+      const map = new Map();
+      sorted.forEach((doc, idx) => map.set(doc._id.toString(), idx + 1));
+      return map;
+    };
+
+    const todayRankMap = rankMap(todayScores);
+    const prevRankMap = rankMap(prevScores);
+
+    // 6️⃣ Enrich team members
+    const enriched = teamMembers.map(member => {
+      const artistIdStr = member.artistId?._id?.toString();
+      const scoreData = artistIdStr ? scoreMap.get(artistIdStr) : null;
+
+      const totalScore = scoreData?.totalScore || 0;
+      const weeklyPoints = scoreData?.weeklyScore || 0;
+      const rank = artistIdStr ? todayRankMap.get(artistIdStr) || null : null;
+      const previousRank = artistIdStr ? prevRankMap.get(artistIdStr) || null : null;
+      const outOf = todayScores.length;
+
+      const draftingPercentage = artistIdStr
+        ? Math.round(
+            ((pickCountsMap.get(`${artistIdStr}|${member.category}`) || 0) /
+              (totalTeamsByCategory.get(member.category) || 1)) *
+              100
+          )
+        : 0;
+
+      return {
+        ...member,
+        artistId: member.artistId
+          ? { ...member.artistId, totalScore, rank, previousRank, outOf, draftingPercentage, weeklyPoints }
+          : { totalScore: 0, rank: null, previousRank: null, outOf: 0, draftingPercentage: 0, weeklyPoints: 0 }
+      };
+    });
+
+    // 7️⃣ Compute team total points & global ranking in bulk
+    const allTeams = await UserTeam.find().lean();
+    const allTeamMembers = await TeamMember.find({ teamId: { $in: allTeams.map(t => t._id) } }).lean();
+    const artistToScoreMap = new Map(scoresAgg.map(doc => [doc._id.toString(), doc.totalScore]));
+
+    const teamPointsList = allTeams.map(team => {
+      const members = allTeamMembers.filter(m => m.teamId.toString() === team._id.toString());
+      const totalPoints = members.reduce((sum, m) => {
+        const score = m.artistId ? artistToScoreMap.get(m.artistId.toString()) || 0 : 0;
+        return sum + score;
+      }, 0);
+      return { teamId: team._id.toString(), totalPoints };
+    });
+
+    teamPointsList.sort((a, b) => b.totalPoints - a.totalPoints);
+    const teamRank = teamPointsList.findIndex(t => t.teamId === userTeam._id.toString()) + 1;
+
+    // 8️⃣ Profile image URL
     const userProfileImageUrl = user.profileImage
-      ? (user.profileImage.startsWith("http") ? user.profileImage : `${req.protocol}://${req.get("host")}${user.profileImage}`)
+      ? user.profileImage.startsWith("http")
+        ? user.profileImage
+        : `${req.protocol}://${req.get("host")}${user.profileImage}`
       : null;
 
     res.json({
       teamName: userTeam.teamName,
       userProfileImage: userProfileImageUrl,
-      teamTotalPoints,
-      weeklyPoints,
-      teamRank, // new global team rank
+      teamTotalPoints: enriched.reduce((sum, m) => sum + (m.artistId?.totalScore || 0), 0),
+      weeklyPoints: enriched.reduce((sum, m) => sum + (m.artistId?.weeklyPoints || 0), 0),
+      teamRank,
       totalTeams: allTeams.length,
       userTeam,
       teamMembers: enriched
     });
   } catch (err) {
-    console.error("Error fetching user draft:", err.message);
+    console.error("Error fetching user draft:", err);
     res.status(500).json({ error: "Failed to fetch user draft" });
   }
 };
+
 
 
 
@@ -407,91 +375,85 @@ exports.lockDraft = async (req, res) => {
 
 exports.updateDraft = async (req, res) => {
   const userId = req.user._id;
-  // Handle multipart/form-data where values may be strings
   let { draftedArtists, teamName, profileImage } = req.body;
+
   if (typeof draftedArtists === "string") {
     try {
       draftedArtists = JSON.parse(draftedArtists);
-    } catch (e) {
+    } catch {
       draftedArtists = [];
     }
   }
+
   try {
-    // Find the user's team
     const userTeam = await UserTeam.findOne({ userId });
-    console.log("user team is", userTeam);
-    
-    if (!userTeam) {
-      return res.status(404).json({ error: "User team not found" });
-    }
-    // Update teamName if provided (always allowed, independent of lock)
-    if (Object.prototype.hasOwnProperty.call(req.body, "teamName")) {
+    if (!userTeam) return res.status(404).json({ error: "User team not found" });
+
+    // Update team name (always allowed)
+    if ("teamName" in req.body) {
       userTeam.teamName = teamName ?? null;
       await userTeam.save();
     }
-    // Update user profile image if provided as URL or uploaded file (always allowed)
-    if (req.file && req.file.filename) {
+
+    // Update profile image (always allowed)
+    if (req.file?.filename) {
       await User.findByIdAndUpdate(userId, { profileImage: `/uploads/profile/${req.file.filename}` }, { new: true });
-    } else if (Object.prototype.hasOwnProperty.call(req.body, "profileImage")) {
+    } else if ("profileImage" in req.body) {
       await User.findByIdAndUpdate(userId, { profileImage: profileImage ?? null }, { new: true });
     }
 
-    // If draftedArtists are provided, enforce 7-day lock for team members only
-    if (Array.isArray(draftedArtists)) {
-      // Compare with existing composition; if identical, do not treat as a composition change
+    if (Array.isArray(draftedArtists) && draftedArtists.length > 0) {
       const existingMembers = await TeamMember.find({ teamId: userTeam._id }).select("artistId");
       const existingIds = new Set(existingMembers.map(m => String(m.artistId)));
       const incomingIds = new Set(draftedArtists.map(id => String(id)));
-      const isSameSize = existingIds.size === incomingIds.size;
-      const isSameSet = isSameSize && Array.from(existingIds).every(id => incomingIds.has(id));
+      const isSameSet = existingIds.size === incomingIds.size && Array.from(existingIds).every(id => incomingIds.has(id));
 
-      if (draftedArtists.length > 0 && !isSameSet) {
+      if (!isSameSet) {
         const now = new Date();
         const referenceTime = userTeam.lastUpdatedAt ? new Date(userTeam.lastUpdatedAt) : new Date(userTeam.createdAt);
-        const unlockTime = new Date(referenceTime.getTime() + 7 * 24 * 60 * 60 * 1000);
-        if (now < unlockTime) {
-          const msRemaining = unlockTime.getTime() - now.getTime();
+
+        // Calculate time since reference
+        const msSinceRef = now - referenceTime;
+        const cycleTime = 7 * 24 * 60 * 60 * 1000 + 24 * 60 * 60 * 1000; // 7 days lock + 24 hours unlock
+        const timeInCycle = msSinceRef % cycleTime;
+
+        if (timeInCycle > 24 * 60 * 60 * 1000) {
+          // Locked period (after 24h unlocked)
+          const msRemaining = cycleTime - timeInCycle;
           const days = Math.floor(msRemaining / (24 * 60 * 60 * 1000));
           const hours = Math.floor((msRemaining % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000));
           const minutes = Math.floor((msRemaining % (60 * 60 * 1000)) / (60 * 1000));
           return res.status(403).json({
             error: "Draft is locked",
-            message: `You can update your team members in ${days}d ${hours}h ${minutes}m. Team composition updates are allowed every 7 days after creation or last update.`,
-            unlockAt: unlockTime
+            message: `Team is locked. You can update in ${days}d ${hours}h ${minutes}m.`,
           });
         }
-        // Remove old team members
+
+        // Unlock period, allow update
         await TeamMember.deleteMany({ teamId: userTeam._id });
-        // Add new team members
         const teamMembers = await Promise.all(
           draftedArtists.map(async (artistId) => {
             const category = await determineCategory(artistId);
-            return {
-              teamId: userTeam._id,
-              artistId,
-              category,
-            };
+            return { teamId: userTeam._id, artistId, category };
           })
         );
         await TeamMember.insertMany(teamMembers);
 
-        // Mark the time of this successful team member update to start next 7-day lock
-        userTeam.lastUpdatedAt = new Date();
+        userTeam.lastUpdatedAt = now;
         await userTeam.save();
 
-        const nextUnlockAt = new Date(userTeam.lastUpdatedAt.getTime() + 7 * 24 * 60 * 60 * 1000);
         return res.status(200).json({
-          message: "Team members updated successfully. Your team is now locked for 7 days.",
-          lockedUntil: nextUnlockAt
+          message: "Team members updated successfully. Team will lock after 24 hours.",
         });
       }
     }
 
-    // If only name/profile were updated
     return res.status(200).json({ message: "Profile/Team info updated successfully" });
+
   } catch (err) {
     console.error("Error updating draft:", err.message);
     res.status(500).json({ error: "Failed to update draft" });
   }
 };
+
 
