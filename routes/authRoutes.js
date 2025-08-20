@@ -53,7 +53,7 @@ router.get(
       { expiresIn: "7d" }
     );
 console.log("Generated JWT token:", token);
-res.redirect(`http://localhost:3000/login?token=${token}&user=${encodeURIComponent(JSON.stringify(req.user))}`);
+res.redirect(`https://floahh-frontend.onrender.com/login?token=${token}&user=${encodeURIComponent(JSON.stringify(req.user))}`);
 console.log("Redirecting to client with token and user data");
     // res.json({
     //   message: "Google login successful",
