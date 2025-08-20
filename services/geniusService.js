@@ -1,6 +1,6 @@
 const axios = require("axios");
 
-const GENIUS_ACCESS_TOKEN = "VZ8O5gEisnxHUY9W0Sj02TkNLE1JwYGZLDDB4Dm7sJYsmXhcDzIMlKCUSH-WFqXp";
+const GENIUS_ACCESS_TOKEN = process.env.GENIUS_ACCESS_TOKEN;
 
 async function getGeniusDescription(artistName) {
   try { 
