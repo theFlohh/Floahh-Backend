@@ -14,16 +14,25 @@ const tierRoutes = require("./routes/tierRoutes");
 const draftRoutes = require("./routes/draftRoutes");
 const userStatsRoutes = require("./routes/userStatsRoutes");
 const runWeeklyTiering = require("./jobs/weeklyTieringJob");
+const passport = require("./config/passport");
+const session = require("express-session");
 
 
 dotenv.config();
 const app = express();
-
+app.use(
+  session({
+    secret: "your_secret_key",
+    resave: false,
+    saveUninitialized: false,
+  })
+);
 app.use(cors());
 app.use(express.json());
 // Serve static uploads (profile images, etc.)
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
-
+app.use(passport.initialize());
+app.use(passport.session());
 mongoose
 .connect(process.env.MONGO_URI, {})
 .then(() => console.log("✅ MongoDB connected"))
