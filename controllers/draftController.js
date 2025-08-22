@@ -34,9 +34,7 @@ exports.updateDraft = async (req, res) => {
     if (!userTeam) {
       return res.status(404).json({ error: "User team not found" });
     }
-    // if (teamName) {
-    //   await userTeam.save();
-    // } 
+
     // 1) Team name update
     if ("teamName" in req.body) {
       if (teamName === undefined || teamName === "undefined") {
@@ -47,11 +45,11 @@ exports.updateDraft = async (req, res) => {
       await userTeam.save();
     }
 
-    // 2) Profile image update
-    if (req.file?.filename) {
+    // 2) Profile image update (S3 URL use karo)
+    if (req.file?.s3Url) {
       await User.findByIdAndUpdate(
         userId,
-        { profileImage: `/uploads/profile/${req.file.filename}` },
+        { profileImage: req.file.s3Url },  // 👈 local path ki jagah S3 URL
         { new: true }
       );
     } else if ("profileImage" in req.body) {
@@ -131,6 +129,7 @@ exports.updateDraft = async (req, res) => {
     res.status(500).json({ error: "Failed to update draft" });
   }
 };
+
 exports.getDraftableArtists = async (req, res) => {
   const { category } = req.query;
 
@@ -525,6 +524,167 @@ exports.getUserDraft = async (req, res) => {
   } catch (err) {
     console.error("Error fetching user draft:", err);
     res.status(500).json({ error: "Failed to fetch user draft" });
+  }
+};
+
+
+
+
+exports.getUserTeamById = async (req, res) => {
+  const { userId } = req.params;
+
+  if (!userId) {
+    return res.status(400).json({ error: "User ID is required" });
+  }
+
+  try {
+    // 1️⃣ Fetch user and their team
+    const [user, userTeam] = await Promise.all([
+      User.findById(userId).select("name profileImage").lean(),
+      UserTeam.findOne({ userId }).lean()
+    ]);
+
+    if (!user) return res.status(404).json({ error: "User not found" });
+    if (!userTeam) return res.status(404).json({ error: "User team not found" });
+
+    // 2️⃣ Fetch all team members in one query
+    const teamMembers = await TeamMember.find({ teamId: userTeam._id })
+      .populate("artistId")
+      .lean();
+
+    const artistIds = teamMembers.map(m => m.artistId?._id).filter(Boolean);
+
+    // 3️⃣ Fetch total draft counts per category & artist in bulk
+    const userCategories = [...new Set(teamMembers.map(m => m.category))];
+
+    const totalTeamsByCategoryAgg = await TeamMember.aggregate([
+      { $match: { category: { $in: userCategories } } },
+      { $group: { _id: "$category", teams: { $addToSet: "$teamId" } } }
+    ]);
+    const totalTeamsByCategory = new Map(
+      totalTeamsByCategoryAgg.map(doc => [doc._id, doc.teams.length])
+    );
+
+    const pickCountsAgg = await TeamMember.aggregate([
+      { $match: { artistId: { $in: artistIds } } },
+      { $group: { _id: { artistId: "$artistId", category: "$category" }, count: { $sum: 1 } } }
+    ]);
+    const pickCountsMap = new Map(
+      pickCountsAgg.map(doc => [`${doc._id.artistId}|${doc._id.category}`, doc.count])
+    );
+
+    // 4️⃣ Fetch all DailyScore data in bulk
+    const now = new Date();
+    const weekAgo = new Date(now);
+    weekAgo.setDate(now.getDate() - 7);
+
+    const scoresAgg = await DailyScore.aggregate([
+      { $match: { artistId: { $in: artistIds } } },
+      {
+        $group: {
+          _id: "$artistId",
+          totalScore: { $sum: "$totalScore" },
+          latestScore: { $last: "$totalScore" },
+          latestDate: { $last: "$date" },
+          weeklyScore: {
+            $sum: { $cond: [{ $gte: ["$date", weekAgo] }, "$totalScore", 0] }
+          }
+        }
+      }
+    ]);
+
+    const scoreMap = new Map(scoresAgg.map(doc => [doc._id.toString(), doc]));
+
+    // 5️⃣ Compute today and previous rankings in Node.js
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+    const todayScores = await DailyScore.aggregate([
+      { $match: { artistId: { $in: artistIds }, date: { $gte: todayStart } } },
+      { $group: { _id: "$artistId", score: { $sum: "$totalScore" } } }
+    ]);
+
+    const prevScores = await DailyScore.aggregate([
+      { $match: { artistId: { $in: artistIds }, date: { $lt: todayStart } } },
+      { $sort: { date: -1 } },
+      { $group: { _id: "$artistId", score: { $first: "$totalScore" } } }
+    ]);
+
+    const rankMap = (arr) => {
+      const sorted = [...arr].sort((a, b) => b.score - a.score);
+      const map = new Map();
+      sorted.forEach((doc, idx) => map.set(doc._id.toString(), idx + 1));
+      return map;
+    };
+
+    const todayRankMap = rankMap(todayScores);
+    const prevRankMap = rankMap(prevScores);
+
+    // 6️⃣ Enrich team members
+    const enriched = teamMembers.map(member => {
+      const artistIdStr = member.artistId?._id?.toString();
+      const scoreData = artistIdStr ? scoreMap.get(artistIdStr) : null;
+
+      const totalScore = scoreData?.totalScore || 0;
+      const weeklyPoints = scoreData?.weeklyScore || 0;
+      const rank = artistIdStr ? todayRankMap.get(artistIdStr) || null : null;
+      const previousRank = artistIdStr ? prevRankMap.get(artistIdStr) || null : null;
+      const outOf = todayScores.length;
+
+      const draftingPercentage = artistIdStr
+        ? Math.round(
+            ((pickCountsMap.get(`${artistIdStr}|${member.category}`) || 0) /
+              (totalTeamsByCategory.get(member.category) || 1)) *
+              100
+          )
+        : 0;
+
+      return {
+        ...member,
+        artistId: member.artistId
+          ? { ...member.artistId, totalScore, rank, previousRank, outOf, draftingPercentage, weeklyPoints }
+          : { totalScore: 0, rank: null, previousRank: null, outOf: 0, draftingPercentage: 0, weeklyPoints: 0 }
+      };
+    });
+
+    // 7️⃣ Compute team total points & global ranking in bulk
+    const allTeams = await UserTeam.find().lean();
+    const allTeamMembers = await TeamMember.find({ teamId: { $in: allTeams.map(t => t._id) } }).lean();
+    const artistToScoreMap = new Map(scoresAgg.map(doc => [doc._id.toString(), doc.totalScore]));
+
+    const teamPointsList = allTeams.map(team => {
+      const members = allTeamMembers.filter(m => m.teamId.toString() === team._id.toString());
+      const totalPoints = members.reduce((sum, m) => {
+        const score = m.artistId ? artistToScoreMap.get(m.artistId.toString()) || 0 : 0;
+        return sum + score;
+      }, 0);
+      return { teamId: team._id.toString(), totalPoints };
+    });
+
+    teamPointsList.sort((a, b) => b.totalPoints - a.totalPoints);
+    const teamRank = teamPointsList.findIndex(t => t.teamId === userTeam._id.toString()) + 1;
+
+    // 8️⃣ Profile image URL
+    const userProfileImageUrl = user.profileImage
+      ? user.profileImage.startsWith("http")
+        ? user.profileImage
+        : `${req.protocol}://${req.get("host")}${user.profileImage}`
+      : null;
+
+    res.json({
+      teamName: userTeam.teamName,
+      userName: user.name,
+      userProfileImage: userProfileImageUrl,
+      teamTotalPoints: enriched.reduce((sum, m) => sum + (m.artistId?.totalScore || 0), 0),
+      weeklyPoints: enriched.reduce((sum, m) => sum + (m.artistId?.weeklyPoints || 0), 0),
+      dailyPoints: enriched.reduce((sum, m) => sum + (m.artistId?.latestScore || 0), 0),
+      teamRank,
+      totalTeams: allTeams.length,
+      userTeam,
+      teamMembers: enriched
+    });
+  } catch (err) {
+    console.error("Error fetching user team:", err);
+    res.status(500).json({ error: "Failed to fetch user team" });
   }
 };
 

@@ -168,6 +168,7 @@ console.log(`Genius description for ${artist.name}:`, geniusDescription);
 
     res.json({
       name: artist.name,
+      genres: artist.genres,
       spotifyId: artist.spotifyId,
       youtubeChannelId: artist.youtubeChannelId,
       chartmetricId: artist.chartmetricId || null,
