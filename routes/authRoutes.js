@@ -19,6 +19,8 @@ const {
 } = require("../middleware/authMiddleware");
 
 const { uploadProfileImage } = require("../middleware/uploadMiddleware");
+const s3UploadMiddleware = require('../middleware/s3UploadMiddleware');
+
 
 // ------------------ Existing Routes ------------------
 router.post("/register", register);
@@ -29,6 +31,7 @@ router.put(
   "/update",
   authMiddleware,
   uploadProfileImage.single("profileImage"),
+  s3UploadMiddleware,
   updateUser
 );
 router.get("/me", authMiddleware, getUserDetails);

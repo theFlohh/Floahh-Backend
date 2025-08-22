@@ -171,56 +171,55 @@ exports.fetchAllUsers = async (req, res) => {
     res.status(500).json({ error: "Failed to fetch users" });
   }
 };
-  exports.updateUser = async (req, res) => {
-    const userId = req.user._id;
-    const { name, email, password } = req.body;
+ exports.updateUser = async (req, res) => {
+  const userId = req.user._id;
+  const { name, email, password } = req.body;
 
-    try {
-      const user = await User.findById(userId);
-      if (!user) return res.status(404).json({ error: "User not found" });
+  try {
+    const user = await User.findById(userId);
+    if (!user) return res.status(404).json({ error: "User not found" });
 
-      // ✅ Check if email is being updated and already taken
-      if (email && email !== user.email) {
-        const existing = await User.findOne({ email });
-        if (existing) {
-          return res.status(400).json({ error: "Email already in use" });
-        }
-        user.email = email;
+    // ✅ Check if email is being updated and already taken
+    if (email && email !== user.email) {
+      const existing = await User.findOne({ email });
+      if (existing) {
+        return res.status(400).json({ error: "Email already in use" });
       }
-
-      // ✅ Update fields if provided
-      if (name) user.name = name;
-
-      // ✅ Handle profile image from multer
-      if (req.file) {
-        // absolute URL generate
-        const baseUrl = `${req.protocol}://${req.get("host")}`;
-        user.profileImage = `${baseUrl}/uploads/profile/${req.file.filename}`;
-      }
-
-      // ✅ Hash new password if provided
-      if (password) {
-        const hash = await bcrypt.hash(password, 10);
-        user.password = hash;
-      }
-
-      await user.save();
-
-      res.json({
-        message: "User updated successfully",
-        user: {
-          id: user._id,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          profileImage: user.profileImage,
-        },
-      });
-    } catch (err) {
-      console.error("Update user error:", err.message);
-      res.status(500).json({ error: "Failed to update user" });
+      user.email = email;
     }
-  };
+
+    // ✅ Update fields if provided
+    if (name) user.name = name;
+
+    // ✅ Handle profile image from multer (S3 URL use karo)
+    if (req.file?.s3Url) {
+      user.profileImage = req.file.s3Url;
+    }
+
+    // ✅ Hash new password if provided
+    if (password) {
+      const hash = await bcrypt.hash(password, 10);
+      user.password = hash;
+    }
+
+    await user.save();
+
+    res.json({
+      message: "User updated successfully",
+      user: {
+        id: user._id,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        profileImage: user.profileImage,
+      },
+    });
+  } catch (err) {
+    console.error("Update user error:", err.message);
+    res.status(500).json({ error: "Failed to update user" });
+  }
+};
+
   exports.getUserDetails = async (req, res) => {
     const userId = req.user._id; // JWT middleware se aata hai
 

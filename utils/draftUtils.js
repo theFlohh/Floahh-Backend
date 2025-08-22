@@ -1,21 +1,23 @@
 const Artist = require("../models/Artist");
 const Tier = require("../models/Tier");
-
 async function determineCategory(artistId) {
   try {
-    // Fetch the artist's tier from the Tier model
-    const tier = await Tier.findOne({ artistId }).lean();
+    console.log("Looking for tier with artistId:", artistId);
+    const tier = await Tier.findOne({
+      artistId: new mongoose.Types.ObjectId(artistId),
+    }).lean();
+    console.log("Found tier:", tier);
+    console.log("Looking for Tier with artistId:", artistId.toString());
+
     if (!tier) {
-      // Fallback: default to Standard if no explicit tier is set
-      console.warn(`Tier not found for artist ${artistId}; defaulting category to Standard`);
+      console.warn(`No Tier found for artistId: ${artistId.toString()}`);
       return "Standard";
     }
 
-    // Return the category based on the tier
-    return tier.tier; // One of: "Legend", "Trending", "Breakout", "Standard"
+    console.log("Found Tier:", tier);
+    return tier.tier;
   } catch (err) {
     console.error("Error determining category:", err.message);
-    // Final fallback to avoid breaking draft updates
     return "Standard";
   }
 }
