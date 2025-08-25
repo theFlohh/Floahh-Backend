@@ -63,7 +63,7 @@ exports.getDailyLeaderboard = async (req, res) => {
       spotifyStreams: entry.spotifyStreams,
       youtubeViews: entry.youtubeViews,
     }));
-
+console.log(formatted,"formated")
     res.json({
       page,
       limit,
