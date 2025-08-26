@@ -1,5 +1,6 @@
 const Artist = require("../models/Artist");
 const Tier = require("../models/Tier");
+const mongoose = require("mongoose");
 async function determineCategory(artistId) {
   try {
     console.log("Looking for tier with artistId:", artistId);

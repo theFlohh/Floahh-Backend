@@ -28,6 +28,7 @@ const getAccessToken = async () => {
   }
 };
 
+
 const getArtistData = async (spotifyId) => {
   if (!accessToken) await getAccessToken();
   try {
@@ -44,6 +45,7 @@ const getArtistData = async (spotifyId) => {
   }
 };
 
+
 const getTopTracks = async (spotifyId, market = "US") => {
   if (!accessToken) await getAccessToken();
   try {
@@ -55,7 +57,18 @@ const getTopTracks = async (spotifyId, market = "US") => {
     );
     return response.data.tracks;
   } catch (error) {
-    console.error(`Spotify top tracks error for ${spotifyId}:`, error.message);
+    console.error(
+      `Spotify top tracks error for ${spotifyId}:`,
+      error.response?.data || error.message
+    );
+
+    // Retry agar token expire ho jaye
+    if (error.response?.status === 401) {
+      console.log("⚠️ Access token expired, refreshing...");
+      await getAccessToken();
+      return getTopTracks(spotifyId, market);
+    }
+
     return [];
   }
 };

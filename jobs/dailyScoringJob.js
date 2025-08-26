@@ -10,15 +10,19 @@ const { updateUserPoints } = require("../utils/pointsCalculator");
 let lastScoringTime = null; // 🆕
 
 const runDailyScoring = async () => {
+  console.log("Starting daily scoring process...");
   try {
     console.log("📊 Running daily scoring job...");
 
     const artists = await Artist.find();
+    console.log(`Found ${artists.length} artists to score.`);
     const today = new Date().toISOString().slice(0, 10); // YYYY-MM-DD
 
     for (const artist of artists) {
       // Spotify
+      console.log(`Scoring artist: ${artist.spotifyId}`);
       const topTracks = await getTopTracks(artist.spotifyId);
+      
       const {
         totalScore: spotifyTotal,
         spotifyScore,
@@ -53,7 +57,7 @@ const runDailyScoring = async () => {
 
       if (artist.chartmetricId) {
         const chartData = await getChartmetricStats(artist.chartmetricId);
-
+console.log(chartData,"chartData")
         if (chartData) {
           const stats = chartData.cm_statistics || {};
           spotifyStreams = stats.sp_monthly_listeners || 0; // 🆕 fetch value
@@ -115,7 +119,7 @@ const runDailyScoring = async () => {
 
       console.log(`✅ Scored ${artist.name}: ${combinedScore} pts`);
     }
-    const users = await User.find({});
+    const users = await User.find({});  
 for (const user of users) {
   console.log(`Updating points for user: ${user._id}`);
   await updateUserPoints(user._id);

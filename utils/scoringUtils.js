@@ -7,7 +7,7 @@ function calculateSpotifyScore(topTracks) {
   for (const track of topTracks) {
     const popularity = track.popularity || 0;
     spotifyScore += Math.floor(popularity / 10); // Example: 90 pop = 9 pts
-
+console.log(popularity,"popularity")
     const releaseDate = new Date(track.album.release_date);
     const daysOld = (now - releaseDate) / (1000 * 60 * 60 * 24);
     if (daysOld <= 7) newRelease = true;
