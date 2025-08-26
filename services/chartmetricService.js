@@ -10,12 +10,15 @@ async function getChartmetricToken() {
       { headers: { "Content-Type": "application/json" } }
     );
     accessToken = response.data.token;
+    console.log("Chartmetric access token obtained.");
+    console.log("Access Token:", accessToken); // 🆕 Debug log
     return accessToken;
   } catch (err) {
     console.error("Chartmetric token error:", err.message);
     return null;
   }
 }
+
 
 // async function getChartmetricStats(chartmetricId) {
 //   if (!accessToken) await getChartmetricToken();

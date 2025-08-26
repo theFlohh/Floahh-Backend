@@ -53,7 +53,7 @@ app.use("/api/draft", draftRoutes);
 app.use("/api/user-stats", userStatsRoutes);
 app.use("/api/contact", contactUsRoutes);
 
-runDailyScoring();
+// runDailyScoring();
 // 
 
 // 🕒 Schedule to run every day at 2 AM server time

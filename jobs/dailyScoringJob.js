@@ -57,7 +57,7 @@ const runDailyScoring = async () => {
 
       if (artist.chartmetricId) {
         const chartData = await getChartmetricStats(artist.chartmetricId);
-
+console.log(chartData,"chartData")
         if (chartData) {
           const stats = chartData.cm_statistics || {};
           spotifyStreams = stats.sp_monthly_listeners || 0; // 🆕 fetch value

@@ -16,6 +16,7 @@ function normalizeIds(arr) {
     .filter(Boolean);
 }
 exports.updateDraft = async (req, res) => {
+  console.log("function called");
   const userId = req.user._id;
   let { draftedArtists, teamName, profileImage } = req.body;
 
