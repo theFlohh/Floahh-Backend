@@ -10,6 +10,9 @@ const {
   fetchAllUsers,
   updateUser,
   getUserDetails,
+  forgotPassword,
+  verifyOtp,
+  resetPassword
 } = require("../controllers/authController");
 
 const {
@@ -25,6 +28,9 @@ const s3UploadMiddleware = require('../middleware/s3UploadMiddleware');
 // ------------------ Existing Routes ------------------
 router.post("/register", register);
 router.post("/login", login);
+router.post("/forgot-password", forgotPassword);
+router.post("/verify-otp", verifyOtp);
+router.post("/reset-password", resetPassword);
 router.get("/user-points", authMiddleware, getUserPointsBreakdown);
 router.get("/all-users", fetchAllUsers);
 router.put(

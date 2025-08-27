@@ -9,7 +9,7 @@
     chartmetricBuzz: Number,
     newRelease: Boolean,
     crossPlatformSpike: Boolean,
-    totalScore: Number,
+    totalScore: Number, 
     tiktokFollowers: Number,
     tiktokLikes: Number,
     tiktokViews: Number,

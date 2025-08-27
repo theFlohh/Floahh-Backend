@@ -135,18 +135,17 @@ exports.getDraftableArtists = async (req, res) => {
   const { category } = req.query;
 
   try {
-    // 1️⃣ Fetch all tiers with artist populated
+    // 1️⃣ Fetch tiers with artist populated
     const tiers = await Tier.find({ tier: category })
       .populate("artistId")
       .lean();
+
     const artistIds = tiers
       .filter((t) => t.artistId)
       .map((t) => t.artistId._id);
 
-    // 2️⃣ Total distinct teams in this category
-    const totalTeamsInCategory = await TeamMember.distinct("teamId", {
-      category,
-    });
+    // 2️⃣ Distinct teams count
+    const totalTeamsInCategory = await TeamMember.distinct("teamId", { category });
     const totalTeamsCount = totalTeamsInCategory.length;
 
     // 3️⃣ Draft pick counts per artist
@@ -158,42 +157,30 @@ exports.getDraftableArtists = async (req, res) => {
       pickCountsAgg.map((doc) => [doc._id.toString(), doc.count])
     );
 
-    // 4️⃣ Fetch all scores for today and previous day in bulk
+    // 4️⃣ Dates
     const todayStart = new Date();
     todayStart.setUTCHours(0, 0, 0, 0);
-
     const todayEnd = new Date(todayStart);
     todayEnd.setUTCHours(23, 59, 59, 999);
 
-    // Scores for today
-    const todayScores = await DailyScore.aggregate([
-      {
-        $match: {
-          artistId: { $in: artistIds },
-          date: { $gte: todayStart, $lte: todayEnd },
-        },
-      },
-      { $group: { _id: "$artistId", score: { $sum: "$totalScore" } } },
-    ]);
+    // 5️⃣ Fetch today scores directly
+    const todayScores = await DailyScore.find({
+      artistId: { $in: artistIds },
+      date: { $gte: todayStart, $lte: todayEnd },
+    }).select("artistId totalScore");
 
-    // Scores for previous day
+    // 6️⃣ Fetch previous day last score
     const prevScores = await DailyScore.aggregate([
       { $match: { artistId: { $in: artistIds }, date: { $lt: todayStart } } },
       { $sort: { date: -1 } },
       { $group: { _id: "$artistId", score: { $first: "$totalScore" } } },
     ]);
 
-    // Total scores per artist
-    const totalScoresAgg = await DailyScore.aggregate([
-      { $match: { artistId: { $in: artistIds } } },
-      { $group: { _id: "$artistId", totalScore: { $sum: "$totalScore" } } },
-    ]);
+    // Maps
+    const todayMap = new Map(todayScores.map((s) => [s.artistId.toString(), s.totalScore]));
+    const prevMap = new Map(prevScores.map((s) => [s._id.toString(), s.score]));
 
-    const totalScoreMap = new Map(
-      totalScoresAgg.map((doc) => [doc._id.toString(), doc.totalScore])
-    );
-
-    // 5️⃣ Compute ranking in Node.js
+    // 7️⃣ Ranking helpers
     const sortAndMapRanks = (scoreArray) => {
       const sorted = [...scoreArray].sort((a, b) => b.score - a.score);
       const rankMap = new Map();
@@ -201,10 +188,12 @@ exports.getDraftableArtists = async (req, res) => {
       return rankMap;
     };
 
-    const todayRankMap = sortAndMapRanks(todayScores);
+    const todayRankMap = sortAndMapRanks(
+      todayScores.map((s) => ({ _id: s.artistId, score: s.totalScore }))
+    );
     const prevRankMap = sortAndMapRanks(prevScores);
 
-    // 6️⃣ Build final response
+    // 8️⃣ Final response
     const artistsWithData = tiers
       .map((tier) => {
         if (!tier.artistId) return null;
@@ -212,7 +201,7 @@ exports.getDraftableArtists = async (req, res) => {
 
         const rank = todayRankMap.get(artistIdStr) || null;
         const previousRank = prevRankMap.get(artistIdStr) || null;
-        const totalScore = totalScoreMap.get(artistIdStr) || 0;
+        const totalScore = todayMap.get(artistIdStr) || 0;
 
         const artistPickCount = pickCountMap.get(artistIdStr) || 0;
         const draftingPercentage = totalTeamsCount
@@ -238,6 +227,7 @@ exports.getDraftableArtists = async (req, res) => {
     res.status(500).json({ error: "Failed to fetch draftable artists" });
   }
 };
+
 
 // exports.submitDraft = async (req, res) => {
 //   const { draftedArtists } = req.body; // draftedArtists should be an array of artist IDs
@@ -334,8 +324,7 @@ exports.getUserDraft = async (req, res) => {
 
     const artistIds = teamMembers.map((m) => m.artistId?._id).filter(Boolean);
 
-    // 3️⃣ User Leaderboard (same logic as global users leaderboard)
-    // 3️⃣ User Leaderboard (same logic as global users leaderboard)
+    // 3️⃣ User Leaderboard (same as before — NO CHANGE)
     const timeframe = req.query.timeframe || "all"; // daily, weekly, monthly, all
     let match = {};
 
@@ -362,7 +351,6 @@ exports.getUserDraft = async (req, res) => {
         const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
         if (u.createdAt >= monthAgo) weeklyPoints = u.totalPoints;
       } else {
-        // "all" case → weeklyPoints is just totalPoints (or you can keep 0)
         weeklyPoints = u.totalPoints;
       }
 
@@ -388,7 +376,7 @@ exports.getUserDraft = async (req, res) => {
       : 0;
     const userRank = userLeaderboardEntry ? userLeaderboardEntry.rank : null;
 
-    // 4️⃣ Artist Leaderboard (same as global artists leaderboard)
+    // 4️⃣ Artist Leaderboard (RANKING LOGIC UNCHANGED)
     const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
 
     const currentPipeline = [
@@ -408,7 +396,7 @@ exports.getUserDraft = async (req, res) => {
     currentArtists.forEach((a, idx) => {
       currentRankMap.set(a._id.toString(), {
         rank: idx + 1,
-        totalScore: a.totalScore,
+        totalScore: a.totalScore, // (lifetime sum — sirf ranking ke liye)
       });
     });
 
@@ -416,11 +404,28 @@ exports.getUserDraft = async (req, res) => {
     prevArtists.forEach((a, idx) => {
       prevRankMap.set(a._id.toString(), {
         rank: idx + 1,
-        totalScore: a.totalScore,
+        totalScore: a.totalScore, // (previous lifetime — sirf ranking ke liye)
       });
     });
 
-    // 5️⃣ Drafting percentage calculation
+    // 4.5️⃣ Aaj ka totalScore (DailyScore se direct) — NEW (ranking ko touch nahi kiya)
+    const todayStart = new Date();
+    todayStart.setUTCHours(0, 0, 0, 0);
+    const todayEnd = new Date(todayStart);
+    todayEnd.setUTCHours(23, 59, 59, 999);
+
+    const todayScores = await DailyScore.find({
+      artistId: { $in: artistIds },
+      date: { $gte: todayStart, $lte: todayEnd },
+    })
+      .select("artistId totalScore")
+      .lean();
+
+    const todayScoreMap = new Map(
+      todayScores.map((doc) => [doc.artistId.toString(), doc.totalScore || 0])
+    );
+
+    // 5️⃣ Drafting percentage calculation (UNCHANGED)
     const userCategories = [...new Set(teamMembers.map((m) => m.category))];
 
     const totalTeamsByCategoryAgg = await TeamMember.aggregate([
@@ -447,7 +452,7 @@ exports.getUserDraft = async (req, res) => {
       ])
     );
 
-    // 6️⃣ Enrich team members with drafting percentage + artist ranking info
+    // 6️⃣ Enrich team members (ranking same; totalScore = aaj ka)
     const enriched = teamMembers.map((member) => {
       const artistIdStr = member.artistId?._id?.toString();
 
@@ -466,7 +471,11 @@ exports.getUserDraft = async (req, res) => {
 
       const currentRank = currentRankData ? currentRankData.rank : null;
       const previousRank = prevRankData ? prevRankData.rank : null;
-      const totalScore = currentRankData ? currentRankData.totalScore : 0;
+
+      // ⬇️ IMPORTANT: Ab totalScore aaj ka DailyScore.totalScore hai
+      const totalScore = artistIdStr
+        ? todayScoreMap.get(artistIdStr) || 0
+        : 0;
 
       return {
         ...member,
@@ -476,7 +485,7 @@ exports.getUserDraft = async (req, res) => {
               draftingPercentage,
               currentRank,
               previousRank,
-              totalScore,
+              totalScore, // today’s score, just like draftableArtists
             }
           : {
               draftingPercentage: 0,
@@ -499,7 +508,7 @@ exports.getUserDraft = async (req, res) => {
       userName: user.name,
       userProfileImage: userProfileImageUrl,
       totalPoints,
-      weeklyPoints, // 👈 ab wapas aagya
+      weeklyPoints,
       rank: userRank,
       totalUsers: sortedUsers.length,
       userTeam,
@@ -510,6 +519,8 @@ exports.getUserDraft = async (req, res) => {
     res.status(500).json({ error: "Failed to fetch user draft" });
   }
 };
+
+
 
 exports.getUserTeamById = async (req, res) => {
   const { userId } = req.params;

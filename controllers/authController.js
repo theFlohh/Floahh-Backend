@@ -6,7 +6,8 @@ const TeamMember = require("../models/TeamMember");
 const DailyScore = require("../models/DailyScore");
 const Artist = require("../models/Artist");
 const path = require("path");
-
+const crypto = require("crypto");
+const { transporter } = require("../services/mailer"); 
 const JWT_SECRET = process.env.JWT_SECRET;
 const ADMIN_SECRET = process.env.ADMIN_SECRET || "supersecret";
 
@@ -66,7 +67,74 @@ exports.login = async (req, res) => {
     res.status(500).json({ error: "Login failed" });
   }
 };
+exports.forgotPassword = async (req, res) => {
+  const { email } = req.body;
+  try {
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ error: "User not found" });
 
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+
+    user.resetOtp = otp;
+    user.resetOtpExpiry = Date.now() + 10 * 60 * 1000; // 10 minutes valid
+    await user.save();
+
+    // Send email
+    await transporter.sendMail({
+      from: process.env.GMAIL_USER,
+      to: email,
+      subject: "Password Reset OTP",
+      html: `<p>Your OTP is <b>${otp}</b>. It will expire in 10 minutes.</p>`,
+    });
+
+    res.json({ message: "OTP sent to email" });
+  } catch (err) {
+    console.error("Forgot password error:", err);
+    res.status(500).json({ error: "Something went wrong" });
+  }
+};
+exports.verifyOtp = async (req, res) => {
+  const { email, otp } = req.body;
+  try {
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    if (user.resetOtp !== otp || user.resetOtpExpiry < Date.now()) {
+      return res.status(400).json({ error: "Invalid or expired OTP" });
+    }
+
+    res.json({ message: "OTP verified successfully" });
+  } catch (err) {
+    console.error("OTP verify error:", err);
+    res.status(500).json({ error: "Something went wrong" });
+  }
+};
+exports.resetPassword = async (req, res) => {
+  const { email, otp, newPassword } = req.body;
+  try {
+    const user = await User.findOne({ email });
+    if (!user) return res.status(404).json({ error: "User not found" });
+
+    if (user.resetOtp !== otp || user.resetOtpExpiry < Date.now()) {
+      return res.status(400).json({ error: "Invalid or expired OTP" });
+    }
+
+    const hash = await bcrypt.hash(newPassword, 10);
+    user.password = hash;
+
+    // clear OTP fields
+    user.resetOtp = undefined;
+    user.resetOtpExpiry = undefined;
+
+    await user.save();
+
+    res.json({ message: "Password reset successful" });
+  } catch (err) {
+    console.error("Reset password error:", err);
+    res.status(500).json({ error: "Something went wrong" });
+  }
+};
 exports.getUserPointsBreakdown = async (req, res) => {
   const userId = req.user._id;
 
