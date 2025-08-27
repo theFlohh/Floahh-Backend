@@ -18,7 +18,6 @@ const passport = require("./config/passport");
 const session = require("express-session");
 const contactUsRoutes = require("./routes/contactUsRoutes")
 
-
 dotenv.config();
 const app = express();
 app.use(

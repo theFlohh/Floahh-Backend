@@ -3,6 +3,7 @@ const TeamMember = require("../models/TeamMember");
 const Artist = require("../models/Artist");
 const DailyScore = require("../models/DailyScore");
 const User = require("../models/User");
+const UserScoreHistory = require("../models/UserScoreHistory");
 
 async function updateUserPoints(userId) {
   console.log("🔄 Calculating points for user:", userId);
@@ -32,6 +33,13 @@ async function updateUserPoints(userId) {
 
   await User.findByIdAndUpdate(userId, { totalPoints: total });
   console.log(`✅ User ${userId} totalPoints updated: ${total}`);
+    await UserScoreHistory.create({
+    userId,
+    points: total,
+    createdAt: new Date(), 
+  });
+  console.log(`📝 UserScoreHistory created for user ${userId} with points: ${total}`);
+
   return total;
 }
 

@@ -15,7 +15,7 @@ const {
   getFriendLeaderboardByParams,
   createFriendLeaderboard,
   getMyFriendLeaderboards,
-  joinFriendLeaderboard,
+  joinFriendLeaderboard
 } = require("../controllers/leaderboardController");
 const { authMiddleware } = require("../middleware/authMiddleware");
 

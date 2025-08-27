@@ -6,6 +6,7 @@ const FriendLeaderboard = require("../models/friendLeaderboardModel");
 const mongoose = require("mongoose");
 const UserTeam = require("../models/UserTeam");
 const TeamMember = require("../models/TeamMember");
+const UserScoreHistory = require("../models/UserScoreHistory"); // add this
 
 // exports.getDailyLeaderboard = async (req, res) => {
 //   const dateQuery = req.query.date;
@@ -191,7 +192,6 @@ exports.getMonthlyLeaderboard = async (req, res) => {
     res.status(500).json({ error: "Failed to fetch monthly leaderboard" });
   }
 };
-
 // exports.getTrendingArtists = async (req, res) => {
 //   const getUTCDate = (daysOffset = 0) => {
 //     const date = new Date();
@@ -432,36 +432,75 @@ exports.getStoredBonuses = async (req, res) => {
   }
 };
 
+
 exports.getGlobalLeaderboard = async (req, res) => {
   try {
     const timeframe = req.query.timeframe || "all";
     const entity = req.query.entity || "users"; // 'users' | 'artists'
 
-    let match = {};
-    if (timeframe === "weekly") {
-      const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-      match.createdAt = { $gte: weekAgo };
-    } else if (timeframe === "monthly") {
-      const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-      match.createdAt = { $gte: monthAgo };
-    }
-
-    // Conditionally fetch users
+    // Users leaderboard
     let users = [];
     if (entity === "users") {
-      users = await User.find(match)
-        .sort({ totalPoints: -1 })
-        .limit(100)
-        .select("name totalPoints profileImage")
-        .lean();
+      let startDate;
+      const now = new Date();
+
+      if (timeframe === "daily") {
+        startDate = new Date();
+        startDate.setHours(0, 0, 0, 0);
+      } else if (timeframe === "weekly") {
+        startDate = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
+      } else if (timeframe === "monthly") {
+        startDate = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+      }
+
+      const match = startDate
+        ? { createdAt: { $gte: startDate, $lte: now } }
+        : {};
+
+      // Aggregation on UserScoreHistory
+      users = await UserScoreHistory.aggregate([
+        Object.keys(match).length ? { $match: match } : null,
+        {
+          $group: {
+            _id: "$userId",
+            totalPoints: { $sum: "$points" },
+          },
+        },
+        { $sort: { totalPoints: -1 } },
+        { $limit: 100 },
+        {
+          $lookup: {
+            from: "users",
+            localField: "_id",
+            foreignField: "_id",
+            as: "user",
+          },
+        },
+        { $unwind: "$user" },
+        {
+          $project: {
+            _id: "$user._id",
+            name: "$user.name",
+            totalPoints: 1,
+            profileImage: "$user.profileImage",
+          },
+        },
+      ].filter(Boolean));
     }
 
-    // Conditionally fetch artists using DailyScore aggregation to compute totalScore
+    // Artists leaderboard (unchanged)
     let artists = [];
     if (entity === "artists") {
       const now = new Date();
       let dateMatch = {};
-      if (timeframe === "weekly") {
+
+      if (timeframe === "daily") {
+        const startOfDay = new Date();
+        startOfDay.setHours(0, 0, 0, 0);
+        const endOfDay = new Date();
+        endOfDay.setHours(23, 59, 59, 999);
+        dateMatch = { date: { $gte: startOfDay, $lte: endOfDay } };
+      } else if (timeframe === "weekly") {
         const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
         dateMatch = { date: { $gte: weekAgo, $lte: now } };
       } else if (timeframe === "monthly") {
@@ -518,14 +557,13 @@ exports.getGlobalLeaderboard = async (req, res) => {
       type: "artist",
     }));
 
-    // Return only the requested entity
     if (entity === "users") {
       return res.status(200).json({ users: usersFormatted });
     }
     if (entity === "artists") {
       return res.status(200).json({ artists: artistsFormatted });
     }
-    // Fallback
+
     return res
       .status(400)
       .json({ error: "Invalid entity. Use 'users' or 'artists'" });
@@ -534,6 +572,8 @@ exports.getGlobalLeaderboard = async (req, res) => {
     res.status(500).json({ error: "Something went wrong." });
   }
 };
+
+
 
 exports.getFriendLeaderboardByParams = async (req, res) => {
   try {
@@ -558,19 +598,39 @@ exports.createFriendLeaderboard = async (req, res) => {
   const creatorId = req.user._id;
 
   try {
+    // sab members + creator add karo
+    const allMembers = [...members, creatorId];
+
+    // yahan tum user ka score fetch karke total banao
+    // Example: maan lo user model me "totalScore" field hai
+    const users = await User.find({ _id: { $in: allMembers } }, "totalPoints");
+console.log("Users found for leaderboard:", users);
+    const totalScore = users.reduce((acc, user) => acc + (user.totalPoints || 0), 0);
+console.log("Total score calculated:", totalScore);
     const board = await FriendLeaderboard.create({
       name,
       creatorId,
-      members: [...members, creatorId], // Add creator as member
+      members: allMembers,
+      totalScore
     });
-    res
-      .status(201)
-      .json({ message: "Friend leaderboard created", leaderboard: board });
+
+    res.status(201).json({
+      message: "Friend leaderboard created",
+      leaderboard: {
+        _id: board._id,
+        name: board.name,
+        creatorId: board.creatorId,
+        members: board.members, // sirf IDs
+        totalScore: board.totalScore
+      }
+    });
   } catch (err) {
     console.error("Error creating friend leaderboard:", err);
     res.status(500).json({ error: "Failed to create leaderboard" });
   }
 };
+
+
 
 // GET /api/leaderboard/friend/:id
 exports.getFriendLeaderboard = async (req, res) => {
@@ -598,20 +658,129 @@ exports.getFriendLeaderboard = async (req, res) => {
 // GET /api/leaderboard/friend/mine
 exports.getMyFriendLeaderboards = async (req, res) => {
   try {
-    console.log("req is", req);
+    console.log("👉 Request User:", req.user?._id);
 
+    // Step 1: Get leaderboards with members populated
     const leaderboards = await FriendLeaderboard.find({
-      creatorId: req.user._id,
+      creatorId: req.user.id,
+    })
+      .populate({
+        path: "members",
+        select: "name email profileImage totalPoints",
+      })
+      .lean();
+
+    if (!leaderboards.length) {
+      return res.json({ leaderboards: [] });
+    }
+
+    // Step 2: Collect all memberIds
+    const allMemberIds = leaderboards.flatMap(lb =>
+      lb.members.map(m => m._id)
+    );
+
+    // Step 3: Get all teams
+    const teams = await UserTeam.find({ userId: { $in: allMemberIds } }).lean();
+    const teamIds = teams.map(t => t._id);
+
+    // Step 4: Get all teamMembers with artist populated
+    const teamMembers = await TeamMember.find({ teamId: { $in: teamIds } })
+      .populate("artistId", "name image") // sirf basic artist data
+      .lean();
+
+    // ✅ Step 5: Collect all artistIds
+    const artistIds = teamMembers.map(tm => tm.artistId?._id).filter(Boolean);
+
+    // ✅ Step 6: Get latest scores for each artist (aggregation for speed)
+    const latestScores = await DailyScore.aggregate([
+      { $match: { artistId: { $in: artistIds } } },
+      { $sort: { date: -1 } }, // latest first
+      {
+        $group: {
+          _id: "$artistId",
+          totalScore: { $first: "$totalScore" },
+        },
+      },
+    ]);
+
+    // Convert to Map for O(1) lookup
+    const scoreMap = {};
+    latestScores.forEach(s => {
+      scoreMap[s._id.toString()] = s.totalScore;
     });
-    console.log("leaderboards is", leaderboards);
 
-    res.json({ leaderboards });
+    // Step 7: Map teamId → teamMembers with scores
+    const teamMembersByTeam = {};
+    teamMembers.forEach(tm => {
+      if (!teamMembersByTeam[tm.teamId]) teamMembersByTeam[tm.teamId] = [];
+
+      const artist = tm.artistId || {};
+      const artistId = artist._id?.toString();
+
+      teamMembersByTeam[tm.teamId].push({
+        _id: artistId || null,
+        name: artist.name || "Unknown Artist",
+        score: scoreMap[artistId] || 0, // ✅ inject latest score
+        image: artist.image || null,
+        category: tm.category || null,
+      });
+    });
+
+    // Step 8: Map userId → team
+    const teamByUser = {};
+    teams.forEach(team => {
+      teamByUser[team.userId] = {
+        _id: team._id,
+        teamName: team.teamName,
+        artists: teamMembersByTeam[team._id] || [],
+      };
+    });
+
+    // Step 9: Build final leaderboard response
+    const leaderboardData = leaderboards.map(lb => {
+      const membersData = lb.members.map(member => {
+        const teamData = teamByUser[member._id] || null;
+
+        return {
+          memberId: member._id,
+          username: member.name,
+          email: member.email,
+          image: member.profileImage,
+          team: teamData
+            ? { ...teamData, totalScore: member.totalPoints || 0 }
+            : null,
+          totalScore: member.totalPoints || 0,
+        };
+      });
+
+      // sort & rank
+      membersData.sort((a, b) => b.totalScore - a.totalScore);
+      const rankedMembers = membersData.map((m, idx) => ({
+        ...m,
+        rank: idx + 1,
+      }));
+
+      return {
+        leaderboardId: lb._id,
+        name: lb.name,
+        totalScore: lb.totalScore,
+        members: rankedMembers,
+      };
+    });
+
+    console.log(
+      "✅ Final Leaderboards:",
+      JSON.stringify(leaderboardData, null, 2)
+    );
+    res.json({ leaderboards: leaderboardData });
   } catch (err) {
-    console.log("Error fetching your leaderboards:", err);
-
+    console.error("❌ Error fetching leaderboards:", err);
     res.status(500).json({ error: "Failed to fetch your leaderboards" });
   }
 };
+
+
+
 
 // POST /api/leaderboard/friend/:id/join
 exports.joinFriendLeaderboard = async (req, res) => {
