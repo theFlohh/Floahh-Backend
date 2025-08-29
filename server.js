@@ -17,7 +17,7 @@ const runWeeklyTiering = require("./jobs/weeklyTieringJob");
 const passport = require("./config/passport");
 const session = require("express-session");
 const contactUsRoutes = require("./routes/contactUsRoutes")
-
+const scoutRoutes = require("./routes/scoutRoutes");
 dotenv.config();
 const app = express();
 app.use(
@@ -51,7 +51,7 @@ app.use("/api/tier", tierRoutes);
 app.use("/api/draft", draftRoutes);
 app.use("/api/user-stats", userStatsRoutes);
 app.use("/api/contact", contactUsRoutes);
-
+app.use("/api/scout", scoutRoutes);
 // runDailyScoring();
 // 
 

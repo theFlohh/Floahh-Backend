@@ -6,6 +6,7 @@ const fs = require("fs");
 const { getTopTracks } = require("../services/spotifyService"); // yahan tumhara spotify API helper hoga
 const mongoose = require("mongoose");
 const { getGeniusDescription } = require("../services/geniusService");
+const { determineCategory } = require("../utils/draftUtils"); // ✅ import function
 
 const upload = multer({ dest: "uploads/" });
 
@@ -48,6 +49,8 @@ exports.getArtistSummary = async (req, res) => {
   try {
     const artist = await Artist.findById(artistId);
     if (!artist) return res.status(404).json({ error: "Artist not found" });
+    const category = await determineCategory(artistId);
+
     const geniusDescription = await getGeniusDescription(artist.name);
     console.log(`Genius description for ${artist.name}:`, geniusDescription);
     const latestScore = await DailyScore.findOne({ artistId })
@@ -58,7 +61,7 @@ exports.getArtistSummary = async (req, res) => {
     const today = new Date();
     const sevenDaysAgo = new Date();
     sevenDaysAgo.setUTCDate(today.getUTCDate() - 6); // Last 7 days including today
-console.log(latestScore,"score")
+    console.log(latestScore, "score");
     // Set time to start and end of day in UTC
     sevenDaysAgo.setUTCHours(0, 0, 0, 0);
     today.setUTCHours(23, 59, 59, 999);
@@ -90,7 +93,7 @@ console.log(latestScore,"score")
     const monthlyTotal = past30.reduce((sum, e) => sum + e.totalScore, 0);
 
     const breakdown = latestScore?.breakdown || {};
-    console.log(breakdown,"breakdown");
+    console.log(breakdown, "breakdown");
     let bestPlatform = "N/A";
     let bestPlatformScore = 0;
     for (const [platform, score] of Object.entries(breakdown)) {
@@ -184,7 +187,8 @@ console.log(latestScore,"score")
       outOf,
       weeklyStats,
       topTracks,
-      description: geniusDescription, // ✅ new field
+      description: geniusDescription,
+      category,
     });
   } catch (err) {
     console.error("Artist summary error:", err.message);
