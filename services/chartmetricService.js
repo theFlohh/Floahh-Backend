@@ -19,27 +19,6 @@ async function getChartmetricToken() {
   }
 }
 
-
-// async function getChartmetricStats(chartmetricId) {
-//   if (!accessToken) await getChartmetricToken();
-//   if (!accessToken) return null;
-
-//   try {
-//     const res = await axios.get(
-//      `https://api.chartmetric.com/api/artist/${chartmetricId}`,
-//       {
-//         headers: {
-//           Authorization: `Bearer ${accessToken}`,
-//         },
-//       }
-//     );
-//     return res.data;
-//   } catch (err) {
-//     console.error(`Chartmetric stats error for ${chartmetricId}:`, err);
-//     return null;
-//   }
-// }
-
 async function getChartmetricStats(chartmetricId) {
   if (!chartmetricId) {
     console.warn("⚠️ Empty chartmetricId passed, skipping...");
@@ -58,10 +37,6 @@ async function getChartmetricStats(chartmetricId) {
         },
       }
     );
-    // return res.data.obj;
-    // console.log("🔥 RAW Chartmetric data:", JSON.stringify(res.data));
-  
-    // console.log("🔥 Parsed Chartmetric data:", JSON.stringify(parsed, null, 2));
     const parsed = parseChartmetricMetrics(res.data.obj);
     return res.data.obj;
   } catch (err) {
@@ -69,34 +44,6 @@ async function getChartmetricStats(chartmetricId) {
     return null;
   }
 }
-
-// async function getChartmetricIdFromSpotify(spotifyId, artistName) {
-//   if (!accessToken) await getChartmetricToken();
-//   if (!accessToken) return null;
-
-//   try {
-//     const res = await axios.get(
-//       `https://api.chartmetric.com/api/search?q=${encodeURIComponent(artistName)}`,
-//       {
-//         headers: {
-//           Authorization: `Bearer ${accessToken}`,
-//         },
-//       }
-//     );
-
-//     console.log("res is", res.data.obj);
-    
-
-//     const match = res.data?.obj?.artists?.find(
-//       (item) => item.spotify_id === spotifyId
-//     );
-
-//     return match?.id || null;
-//   } catch (err) {
-//     console.error(`Chartmetric lookup error for Spotify ID ${spotifyId}:`, err.message);
-//     return null;
-//   }
-// }
 
 async function getChartmetricIdFromSpotify(spotifyId, artistName) {
   if (!accessToken) await getChartmetricToken();
@@ -125,7 +72,6 @@ async function getChartmetricIdFromSpotify(spotifyId, artistName) {
   }
 }
 
-
 async function getChartmetricSearchResults(name) {
   if (!accessToken) await getChartmetricToken();
   if (!accessToken) return null;
@@ -146,8 +92,6 @@ async function getChartmetricSearchResults(name) {
     return null;
   }
 }
-
-
 function parseChartmetricMetrics(data) {
   const stats = data?.cm_statistics?.latest || {};
   const monthlyStats = data?.cm_statistics?.monthly_diff || {};
@@ -193,13 +137,6 @@ function estimateYearsFrom(dateString) {
   const diffYears = (now - created) / (1000 * 60 * 60 * 24 * 365);
   return Math.floor(diffYears);
 }
-
-
-
-
-
-
-
 module.exports = {
   getChartmetricToken,
   getChartmetricStats,
