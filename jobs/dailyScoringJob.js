@@ -60,15 +60,18 @@ const runDailyScoring = async () => {
 console.log(chartData,"chartData")
         if (chartData) {
           const stats = chartData.cm_statistics || {};
+          console.log("Chartmetric stats:", stats); // 🆕 Debug log
           spotifyStreams = stats.sp_monthly_listeners || 0; // 🆕 fetch value
 
           // Chartmetric buzz and spike logic
           chartmetricBuzz = stats.sp_monthly_listeners || 0;
           if (chartmetricBuzz > 1000000) chartmetricScore = 10;
           else if (chartmetricBuzz > 100000) chartmetricScore = 5;
-
+          console.log("Chartmetric buzz score:", chartmetricScore); // 🆕 Debug log
           const growthSpotify = stats.sp_monthly_listeners_rank || 0;
+          console.log("Growth Spotify:", growthSpotify); // 🆕 Debug log
           const growthYouTube = stats.ycs_subscribers_rank || 0;
+          console.log("Growth YouTube:", growthYouTube); // 🆕 Debug log
           if (growthSpotify < 20 && growthYouTube < 20) {
             crossPlatformSpike = true;
             chartmetricScore += 30;

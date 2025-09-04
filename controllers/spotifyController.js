@@ -63,16 +63,17 @@ exports.searchFullArtist = async (req, res) => {
 
         // Step 1: Search Chartmetric by name (not ID)
         const cmSearchRes = await getChartmetricSearchResults(artist.name);
+        console.log("Chartmetric search results:", cmSearchRes); // 🆕 Debug log
         const match = cmSearchRes?.obj?.artists?.find(
           (entry) => entry.name.toLowerCase() === artist.name.toLowerCase()
         );
-
+console.log("Match found in Chartmetric:", match); // 🆕 Debug log
         if (match?.id) {
           chartmetricId = match.id;
 
           // Step 2: Fetch full data from Chartmetric by numeric ID
           const cmStats = await getChartmetricStats(chartmetricId);
-
+          console.log("ressss is", cmStats);
           if (cmStats) {
             tiktokUsername = cmStats.tiktok_username || null;
             youtubeChannelId = cmStats.youtube_channel_id || null;
