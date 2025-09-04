@@ -21,7 +21,7 @@ async function getChartmetricToken() {
 
 async function getChartmetricStats(chartmetricId) {
   if (!chartmetricId) {
-    console.warn("⚠️ Empty chartmetricId passed, skipping...");
+    console.log("⚠️ Empty chartmetricId passed, skipping...");
     return null;
   }
 
@@ -38,6 +38,7 @@ async function getChartmetricStats(chartmetricId) {
       }
     );
     const parsed = parseChartmetricMetrics(res.data.obj);
+    console.log("Parsed Chartmetric data:", parsed); // 🆕 Debug log
     return res.data.obj;
   } catch (err) {
     console.error(`Chartmetric stats error for ${chartmetricId}:`, err.message);
@@ -51,7 +52,9 @@ async function getChartmetricIdFromSpotify(spotifyId, artistName) {
 
   try {
     const res = await axios.get(
-      `https://api.chartmetric.com/api/search?q=${encodeURIComponent(artistName)}`,
+      `https://api.chartmetric.com/api/search?q=${encodeURIComponent(
+        artistName
+      )}`,
       {
         headers: {
           Authorization: `Bearer ${accessToken}`,
@@ -59,15 +62,24 @@ async function getChartmetricIdFromSpotify(spotifyId, artistName) {
       }
     );
 
-    console.log("ressss is", res.data.obj)
+    console.log("ressss is", res.data.obj);
+    console.log(
+      "Searching Chartmetric for Spotify ID:",
+      spotifyId,
+      "or Name:",
+      artistName
+    );
 
     const match = res.data?.obj?.artists?.find(
       (item) => item.spotify_id === spotifyId
     );
-
-    return match?.id || null;
+    console.log("Match found in Chartmetric:", match);
+    return match?.id;
   } catch (err) {
-    console.error(`Chartmetric lookup error for Spotify ID ${spotifyId}:`, err.message);
+    console.error(
+      `Chartmetric lookup error for Spotify ID ${spotifyId}:`,
+      err.message
+    );
     return null;
   }
 }
@@ -85,7 +97,7 @@ async function getChartmetricSearchResults(name) {
         },
       }
     );
-    
+
     return res.data;
   } catch (err) {
     console.error(`Chartmetric search error for name ${name}:`, err.message);
@@ -93,10 +105,13 @@ async function getChartmetricSearchResults(name) {
   }
 }
 function parseChartmetricMetrics(data) {
+  console.log("Raw Chartmetric data:", data);
   const stats = data?.cm_statistics?.latest || {};
+  console.log("Latest statistics:", stats);
   const monthlyStats = data?.cm_statistics?.monthly_diff || {};
   const weeklyStats = data?.cm_statistics?.weekly_diff || {};
   const score = data?.cm_statistics?.latest?.rank?.overall?.score_100;
+  console.log("Momentum score:", score);
 
   const tiktokGrowth =
     data?.cm_statistics?.weekly_diff_percent?.tiktok_track_posts || 0;
@@ -141,5 +156,5 @@ module.exports = {
   getChartmetricToken,
   getChartmetricStats,
   getChartmetricIdFromSpotify,
-  getChartmetricSearchResults
+  getChartmetricSearchResults,
 };

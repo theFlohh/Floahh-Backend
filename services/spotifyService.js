@@ -21,6 +21,8 @@ const getAccessToken = async () => {
   try {
     const response = await axios(authOptions);
     accessToken = response.data.access_token;
+    console.log("Spotify access token obtained.");
+    console.log("Access Token:", accessToken);
     return accessToken;
   } catch (error) {
     console.error("Spotify token error:", error.message);
@@ -55,6 +57,7 @@ const getTopTracks = async (spotifyId, market = "US") => {
         headers: { Authorization: `Bearer ${accessToken}` },
       }
     );
+    console.log(response.data.tracks,"top tracks")
     return response.data.tracks;
   } catch (error) {
     console.error(

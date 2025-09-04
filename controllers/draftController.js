@@ -68,27 +68,16 @@ exports.updateDraft = async (req, res) => {
       artistIds.map((x) => x.toString())
     );
 
-    if (Array.isArray(draftedArtists) && draftedArtists.length > 0) {
+        if (Array.isArray(draftedArtists) && draftedArtists.length > 0) {
       const now = new Date();
-      const referenceTime = userTeam.lastUpdatedAt || userTeam.createdAt;
 
-      // lock/unlock logic
-      const msSinceRef = now - referenceTime;
-      const cycleTime = 7 * 24 * 60 * 60 * 1000 + 24 * 60 * 60 * 1000; // 7d lock + 1d unlock
-      const timeInCycle = msSinceRef % cycleTime;
+      // ✅ Sunday unlock logic
+      const isSunday = now.getDay() === 0; // getDay() => 0 = Sunday, 1 = Monday ... 6 = Saturday
 
-      if (timeInCycle > 24 * 60 * 60 * 1000) {
-        const msRemaining = cycleTime - timeInCycle;
-        const days = Math.floor(msRemaining / (24 * 60 * 60 * 1000));
-        const hours = Math.floor(
-          (msRemaining % (24 * 60 * 60 * 1000)) / (60 * 60 * 1000)
-        );
-        const minutes = Math.floor(
-          (msRemaining % (60 * 60 * 1000)) / (60 * 1000)
-        );
+      if (!isSunday) {
         return res.status(403).json({
           error: "Draft is locked",
-          message: `Team is locked. You can update in ${days}d ${hours}h ${minutes}m.`,
+          message: "Draft updates are only allowed on Sundays. Please try again next Sunday.",
         });
       }
 
@@ -117,10 +106,11 @@ exports.updateDraft = async (req, res) => {
 
       return res.status(200).json({
         message:
-          "Team members updated successfully. Team will lock after 24 hours.",
+          "Team members updated successfully. Draft will be locked until next Sunday.",
         count: teamMembers.length,
       });
     }
+
 
     return res
       .status(200)
