@@ -71,7 +71,7 @@ exports.updateDraft = async (req, res) => {
         if (Array.isArray(draftedArtists) && draftedArtists.length > 0) {
       const now = new Date();
 
-      // ✅ Sunday unlock logic
+      // ✅ Sunday unlock logic 
       const isSunday = now.getDay() === 0; // getDay() => 0 = Sunday, 1 = Monday ... 6 = Saturday
 
       if (!isSunday) {
@@ -314,7 +314,7 @@ exports.getUserDraft = async (req, res) => {
 
     const artistIds = teamMembers.map((m) => m.artistId?._id).filter(Boolean);
 
-    // 3️⃣ User Leaderboard (same as before — NO CHANGE)
+    // 3️⃣ User Leaderboard (same as before)
     const timeframe = req.query.timeframe || "all"; // daily, weekly, monthly, all
     let match = {};
 
@@ -366,44 +366,53 @@ exports.getUserDraft = async (req, res) => {
       : 0;
     const userRank = userLeaderboardEntry ? userLeaderboardEntry.rank : null;
 
-    // 4️⃣ Artist Leaderboard (RANKING LOGIC UNCHANGED)
-    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000);
-
-    const currentPipeline = [
-      { $group: { _id: "$artistId", totalScore: { $sum: "$totalScore" } } },
-      { $sort: { totalScore: -1 } },
-    ];
-    const currentArtists = await DailyScore.aggregate(currentPipeline);
-
-    const prevWeekPipeline = [
-      { $match: { date: { $lt: weekAgo } } },
-      { $group: { _id: "$artistId", totalScore: { $sum: "$totalScore" } } },
-      { $sort: { totalScore: -1 } },
-    ];
-    const prevArtists = await DailyScore.aggregate(prevWeekPipeline);
-
-    const currentRankMap = new Map();
-    currentArtists.forEach((a, idx) => {
-      currentRankMap.set(a._id.toString(), {
-        rank: idx + 1,
-        totalScore: a.totalScore, // (lifetime sum — sirf ranking ke liye)
-      });
-    });
-
-    const prevRankMap = new Map();
-    prevArtists.forEach((a, idx) => {
-      prevRankMap.set(a._id.toString(), {
-        rank: idx + 1,
-        totalScore: a.totalScore, // (previous lifetime — sirf ranking ke liye)
-      });
-    });
-
-    // 4.5️⃣ Aaj ka totalScore (DailyScore se direct) — NEW (ranking ko touch nahi kiya)
+    // -------------------------
+    // 4️⃣ Artist Leaderboard — DAILY ranks (fixed)
+    // -------------------------
+    // Use today's UTC window and yesterday's window for ranking
     const todayStart = new Date();
     todayStart.setUTCHours(0, 0, 0, 0);
     const todayEnd = new Date(todayStart);
     todayEnd.setUTCHours(23, 59, 59, 999);
 
+    const yesterdayStart = new Date(todayStart);
+    yesterdayStart.setUTCDate(yesterdayStart.getUTCDate() - 1);
+    const yesterdayEnd = new Date(todayEnd);
+    yesterdayEnd.setUTCDate(yesterdayEnd.getUTCDate() - 1);
+
+    // Aggregate top scores for today and yesterday (global, all artists)
+    const [topScoresToday, topScoresYesterday] = await Promise.all([
+      DailyScore.aggregate([
+        { $match: { date: { $gte: todayStart, $lte: todayEnd } } },
+        { $group: { _id: "$artistId", totalScore: { $sum: "$totalScore" } } },
+        { $sort: { totalScore: -1, _id: 1 } },
+      ]),
+      DailyScore.aggregate([
+        { $match: { date: { $gte: yesterdayStart, $lte: yesterdayEnd } } },
+        { $group: { _id: "$artistId", totalScore: { $sum: "$totalScore" } } },
+        { $sort: { totalScore: -1, _id: 1 } },
+      ]),
+    ]);
+
+    const currentRankMap = new Map();
+    topScoresToday.forEach((a, idx) => {
+      currentRankMap.set(a._id.toString(), {
+        rank: idx + 1,
+        totalScore: a.totalScore,
+      });
+    });
+
+    const prevRankMap = new Map();
+    topScoresYesterday.forEach((a, idx) => {
+      prevRankMap.set(a._id.toString(), {
+        rank: idx + 1,
+        totalScore: a.totalScore,
+      });
+    });
+
+    const outOfToday = topScoresToday.length;
+
+    // 4.5️⃣ Aaj ka totalScore for user's team members (same as before)
     const todayScores = await DailyScore.find({
       artistId: { $in: artistIds },
       date: { $gte: todayStart, $lte: todayEnd },
@@ -442,7 +451,7 @@ exports.getUserDraft = async (req, res) => {
       ])
     );
 
-    // 6️⃣ Enrich team members (ranking same; totalScore = aaj ka)
+    // 6️⃣ Enrich team members (daily ranks + today's totalScore)
     const enriched = teamMembers.map((member) => {
       const artistIdStr = member.artistId?._id?.toString();
 
@@ -462,7 +471,11 @@ exports.getUserDraft = async (req, res) => {
       const currentRank = currentRankData ? currentRankData.rank : null;
       const previousRank = prevRankData ? prevRankData.rank : null;
 
-      // ⬇️ IMPORTANT: Ab totalScore aaj ka DailyScore.totalScore hai
+      // Rank change: positive -> rank improved (lower number is better)
+      const rankChange =
+        currentRank && previousRank ? previousRank - currentRank : null;
+
+      // ⬇️ today's score for the artist (0 if none)
       const totalScore = artistIdStr
         ? todayScoreMap.get(artistIdStr) || 0
         : 0;
@@ -475,12 +488,14 @@ exports.getUserDraft = async (req, res) => {
               draftingPercentage,
               currentRank,
               previousRank,
-              totalScore, // today’s score, just like draftableArtists
+              rankChange,
+              totalScore, // today’s score
             }
           : {
               draftingPercentage: 0,
               currentRank: null,
               previousRank: null,
+              rankChange: null,
               totalScore: 0,
             },
       };
@@ -493,7 +508,7 @@ exports.getUserDraft = async (req, res) => {
         : `${req.protocol}://${req.get("host")}${user.profileImage}`
       : null;
 
-    // 8️⃣ Final response
+    // 8️⃣ Final response (includes outOfToday)
     res.json({
       userName: user.name,
       userProfileImage: userProfileImageUrl,
@@ -503,12 +518,14 @@ exports.getUserDraft = async (req, res) => {
       totalUsers: sortedUsers.length,
       userTeam,
       teamMembers: enriched,
+      outOfToday,
     });
   } catch (err) {
     console.error("Error fetching user draft:", err);
     res.status(500).json({ error: "Failed to fetch user draft" });
   }
 };
+
 
 
 

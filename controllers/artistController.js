@@ -3,6 +3,7 @@ const DailyScore = require("../models/DailyScore");
 const csv = require("csv-parser");
 const multer = require("multer");
 const fs = require("fs");
+const TeamMember = require("../models/TeamMember");
 const { getTopTracks } = require("../services/spotifyService"); // yahan tumhara spotify API helper hoga
 const mongoose = require("mongoose");
 const { getGeniusDescription } = require("../services/geniusService");
@@ -49,26 +50,42 @@ exports.getArtistSummary = async (req, res) => {
   try {
     const artist = await Artist.findById(artistId);
     if (!artist) return res.status(404).json({ error: "Artist not found" });
-    const category = await determineCategory(artistId);
 
+    const category = await determineCategory(artistId);
     const geniusDescription = await getGeniusDescription(artist.name);
-    console.log(`Genius description for ${artist.name}:`, geniusDescription);
+
     const latestScore = await DailyScore.findOne({ artistId })
       .sort({ date: -1 })
       .lean();
 
-    // Calculate date range for last 7 days using UTC dates
+    // ---------- Calculate Drafting Percentage ----------
+    let draftingPercentage = 0;
+    if (category) {
+      // 1. Get total number of teams in this category
+      const totalTeamsAgg = await TeamMember.aggregate([
+        { $match: { category } },
+        { $group: { _id: null, teams: { $addToSet: "$teamId" } } },
+      ]);
+
+      const totalTeams = totalTeamsAgg.length > 0 ? totalTeamsAgg[0].teams.length : 1;
+
+      // 2. Count how many times this artist was picked in this category
+      const pickCountAgg = await TeamMember.aggregate([
+        { $match: { artistId: new mongoose.Types.ObjectId(artistId), category } },
+        { $group: { _id: null, count: { $sum: 1 } } },
+      ]);
+
+      const pickCount = pickCountAgg.length > 0 ? pickCountAgg[0].count : 0;
+
+      draftingPercentage = Math.round((pickCount / totalTeams) * 100);
+    }
+
+    // ---------- Weekly Stats (last 7 days) ----------
     const today = new Date();
     const sevenDaysAgo = new Date();
-    sevenDaysAgo.setUTCDate(today.getUTCDate() - 6); // Last 7 days including today
-    console.log(latestScore, "score");
-    // Set time to start and end of day in UTC
+    sevenDaysAgo.setUTCDate(today.getUTCDate() - 6);
     sevenDaysAgo.setUTCHours(0, 0, 0, 0);
     today.setUTCHours(23, 59, 59, 999);
-
-    console.log(
-      `Fetching weekly stats from ${sevenDaysAgo.toISOString()} to ${today.toISOString()} for artist ${artistId}`
-    );
 
     const past7 = await DailyScore.find({
       artistId: new mongoose.Types.ObjectId(artistId),
@@ -77,9 +94,7 @@ exports.getArtistSummary = async (req, res) => {
       .sort({ date: 1 })
       .lean();
 
-    console.log(`Found ${past7.length} records for weekly stats`);
-
-    // For monthly stats, use the same UTC approach
+    // ---------- Monthly Stats (last 30 days) ----------
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setUTCDate(today.getUTCDate() - 29);
     thirtyDaysAgo.setUTCHours(0, 0, 0, 0);
@@ -92,8 +107,8 @@ exports.getArtistSummary = async (req, res) => {
     const weeklyPoints = past7.reduce((sum, e) => sum + e.totalScore, 0);
     const monthlyTotal = past30.reduce((sum, e) => sum + e.totalScore, 0);
 
+    // ---------- Best Platform ----------
     const breakdown = latestScore?.breakdown || {};
-    console.log(breakdown, "breakdown");
     let bestPlatform = "N/A";
     let bestPlatformScore = 0;
     for (const [platform, score] of Object.entries(breakdown)) {
@@ -103,6 +118,7 @@ exports.getArtistSummary = async (req, res) => {
       }
     }
 
+    // ---------- Most Viewed Platform ----------
     const viewsMap = {
       Spotify: latestScore?.spotifyStreams || 0,
       YouTube: latestScore?.youtubeViews || 0,
@@ -117,37 +133,52 @@ exports.getArtistSummary = async (req, res) => {
       }
     }
 
-    let rank = null;
+    // ---------- Today's Rank ----------
+    let rankToday = null;
+    let rankYesterday = null;
+    let rankChange = null;
     let outOf = 0;
+
     if (latestScore?.date) {
       const dayStart = new Date(latestScore.date);
       dayStart.setUTCHours(0, 0, 0, 0);
-
       const dayEnd = new Date(latestScore.date);
       dayEnd.setUTCHours(23, 59, 59, 999);
 
-      const topScores = await DailyScore.aggregate([
-        {
-          $match: {
-            date: { $gte: dayStart, $lte: dayEnd },
-          },
-        },
-        {
-          $group: {
-            _id: "$artistId",
-            score: { $sum: "$totalScore" }, // sum all scores of the day
-          },
-        },
-        { $sort: { score: -1, _id: 1 } }, // sort by score, then by artistId for tie-break
+      const topScoresToday = await DailyScore.aggregate([
+        { $match: { date: { $gte: dayStart, $lte: dayEnd } } },
+        { $group: { _id: "$artistId", score: { $sum: "$totalScore" } } },
+        { $sort: { score: -1, _id: 1 } },
       ]);
 
-      outOf = topScores.length;
-      const rankIndex = topScores.findIndex(
+      outOf = topScoresToday.length;
+      const rankIndexToday = topScoresToday.findIndex(
         (entry) => entry._id.toString() === artistId.toString()
       );
-      rank = rankIndex >= 0 ? rankIndex + 1 : null;
+      rankToday = rankIndexToday >= 0 ? rankIndexToday + 1 : null;
+
+      const yesterdayStart = new Date(dayStart);
+      yesterdayStart.setUTCDate(yesterdayStart.getUTCDate() - 1);
+      const yesterdayEnd = new Date(dayEnd);
+      yesterdayEnd.setUTCDate(yesterdayEnd.getUTCDate() - 1);
+
+      const topScoresYesterday = await DailyScore.aggregate([
+        { $match: { date: { $gte: yesterdayStart, $lte: yesterdayEnd } } },
+        { $group: { _id: "$artistId", score: { $sum: "$totalScore" } } },
+        { $sort: { score: -1, _id: 1 } },
+      ]);
+
+      const rankIndexYesterday = topScoresYesterday.findIndex(
+        (entry) => entry._id.toString() === artistId.toString()
+      );
+      rankYesterday = rankIndexYesterday >= 0 ? rankIndexYesterday + 1 : null;
+
+      if (rankToday && rankYesterday) {
+        rankChange = rankYesterday - rankToday;
+      }
     }
 
+    // ---------- Top Tracks ----------
     let topTracks = [];
     if (artist.spotifyId) {
       try {
@@ -167,8 +198,6 @@ exports.getArtistSummary = async (req, res) => {
       breakdown: score.breakdown || {},
     }));
 
-    console.log(`Weekly stats array length: ${weeklyStats.length}`);
-
     res.json({
       name: artist.name,
       genres: artist.genres,
@@ -177,13 +206,16 @@ exports.getArtistSummary = async (req, res) => {
       chartmetricId: artist.chartmetricId || null,
       image: artist.image || null,
       latestScore,
+      draftingPercentage, // ✅ ADDED HERE
       weeklyPoints,
       monthlyTotal,
       bestPlatform,
       bestPlatformScore,
       mostViewedPlatform,
       mostViews,
-      rank,
+      rankToday,
+      rankYesterday,
+      rankChange,
       outOf,
       weeklyStats,
       topTracks,
@@ -195,6 +227,8 @@ exports.getArtistSummary = async (req, res) => {
     res.status(500).json({ error: "Failed to fetch artist summary" });
   }
 };
+
+
 
 exports.uploadArtistCSV = [
   upload.single("file"),

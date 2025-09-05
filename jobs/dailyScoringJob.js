@@ -8,7 +8,7 @@ const { calculateSpotifyScore, calculateYouTubeScore } = require("../utils/scori
 const { updateUserPoints } = require("../utils/pointsCalculator");
 
 let lastScoringTime = null; // 🆕
-
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const runDailyScoring = async () => {
   console.log("Starting daily scoring process...");
   try {
@@ -121,7 +121,10 @@ console.log(chartData,"chartData")
       );
 
       console.log(`✅ Scored ${artist.name}: ${combinedScore} pts`);
+        console.log("⏳ Waiting 5 seconds before next artist...");
+      await delay(5000);
     }
+   
     const users = await User.find({});  
 for (const user of users) {
   console.log(`Updating points for user: ${user._id}`);
